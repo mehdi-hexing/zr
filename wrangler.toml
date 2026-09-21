@@ -15,6 +15,18 @@ type = "Text"
 globs = ["**/*.b64"]
 fallthrough = true
 
+# Persists resolved ProxyIP country/risk lookups so a panel refresh never
+# re-checks an IP it already knows about (see PROXY_GEO_KV usage in
+# src/routes.js). Both the ProxyIPs card and the /xray, /sb subscriptions
+# work fine without this binding (the per-IP cache is just skipped,
+# falling back to the previous behaviour), so it's safe to deploy before
+# setting this up - uncomment once you've created the namespace with:
+#   wrangler kv namespace create PROXY_GEO_KV
+# and copied the id it prints below.
+#[[kv_namespaces]]
+#binding = "PROXY_GEO_KV"
+#id = "paste-the-id-from-the-command-above"
+
 # Whenever you need to monitor real-time Log's,
 # uncomment these three sections.
 #[observability]

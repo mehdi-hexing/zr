@@ -191,6 +191,30 @@ export function countryCodeToFlagEmoji(countryCode) {
   return String.fromCodePoint(...points);
 }
 
+// Small helpers around an optional KV binding: every call site passes
+// `env?.PROXY_GEO_KV` (or similar) through, and both of these are no-ops
+// when that binding isn't configured, so callers never need an "is KV
+// set up" branch of their own - see wrangler.toml for the binding.
+export async function kvGetJson(kv, key) {
+  if (!kv) return null;
+  try {
+    const raw = await kv.get(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export async function kvPutJson(kv, key, value) {
+  if (!kv) return;
+  try {
+    await kv.put(key, JSON.stringify(value));
+  } catch (e) {
+    // Best-effort: a KV outage should only cost us the caching, not break
+    // the feature it's caching for.
+  }
+}
+
 export function makeName(tag, proto) {
   return `${tag}-${proto.toUpperCase()}`;
 }

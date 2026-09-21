@@ -1186,17 +1186,81 @@
         opacity: 0.85;
       }
 
-      .proxyip-host-select {
-        width: 100%;
-        min-height: 26px;
-        margin-top: 2px;
-        padding: 3px 6px;
+      .proxyip-ip-options {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        margin-top: 4px;
+      }
+
+      .proxyip-ip-option {
         border: 1px solid var(--borderColor-default);
         border-radius: var(--radius-sm);
-        background: var(--bgColor-overlay);
-        color: var(--fgColor-default);
+        overflow: hidden;
+        background: var(--bgColor-inset);
+      }
+
+      .proxyip-ip-toggle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 6px 8px;
+        border: none;
+        background: transparent;
+        color: inherit;
         font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .proxyip-ip-checkbox {
+        flex-shrink: 0;
+        width: 14px;
+        height: 14px;
+        border: 1.5px solid var(--borderColor-default);
+        border-radius: 3px;
+        position: relative;
+        transition: background-color var(--transition), border-color var(--transition);
+      }
+
+      .proxyip-ip-option.selected .proxyip-ip-checkbox {
+        background: var(--accent-emphasis);
+        border-color: var(--accent-emphasis);
+      }
+
+      .proxyip-ip-option.selected .proxyip-ip-checkbox::after {
+        content: "";
+        position: absolute;
+        left: 3px;
+        top: 0px;
+        width: 4px;
+        height: 8px;
+        border: solid #fff;
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+      }
+
+      .proxyip-ip-addr {
+        flex: 1;
+        min-width: 0;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .proxyip-ip-configs {
+        display: none;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 0 8px 8px 30px;
+        background: var(--bgColor-overlay);
+      }
+
+      .proxyip-ip-option.selected .proxyip-ip-configs {
+        display: flex;
       }
 
       .proxyip-list {
@@ -1910,13 +1974,17 @@
         }
         if (elements.isp) elements.isp.textContent = geo.isp || geo.organization || geo.org || "N/A";
       }
-      async function fetchIpApiIoInfo(ip) {
+      async function fetchProxyHostInfo(host) {
         try {
-          const response = await fetch(`https://ipapi.co/${ip}/json/`);
+          // Server-side lookup (DNS resolve + geolocation, both run from
+          // the worker, not the visitor's browser) - see handleProxyHostInfo
+          // in src/routes.js. Response shape matches what
+          // updateIpApiIoDisplay() already expects.
+          const response = await fetch(`/proxy-host-info?host=${encodeURIComponent(host)}`);
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           return await response.json();
         } catch (error) {
-          console.error("IP API Error (ipapi.co):", error);
+          console.error("Proxy host info error:", error);
           return null;
         }
       }
@@ -1980,19 +2048,7 @@
           const proxyHostEl = document.getElementById("proxy-host");
           if (proxyHostEl) proxyHostEl.textContent = proxyIpWithPort;
           if (proxyDomainOrIp && proxyDomainOrIp !== "N/A") {
-            let resolvedProxyIp = proxyDomainOrIp;
-            if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(proxyDomainOrIp)) {
-              try {
-                const dnsRes = await fetch(`/resolve-domain?domain=${encodeURIComponent(proxyDomainOrIp)}`);
-                if (dnsRes.ok) {
-                  const dnsData = await dnsRes.json();
-                  if (dnsData.ip) resolvedProxyIp = dnsData.ip;
-                }
-              } catch (e) {
-                console.error("DNS resolution for proxy failed:", e);
-              }
-            }
-            const proxyGeoData = await fetchIpApiIoInfo(resolvedProxyIp);
+            const proxyGeoData = await fetchProxyHostInfo(proxyDomainOrIp);
             updateIpApiIoDisplay(proxyGeoData, "proxy", proxyIpWithPort);
           } else {
             showError("proxy", "Proxy Host not available", proxyIpWithPort);
@@ -2153,37 +2209,54 @@
 
         const div = document.createElement("div");
         div.className = "proxyip-item";
-        const options = hostGroup.entries
-          .map((entry, i) => `<option value="${i}">${escapeHtml(entry.ip)} · ${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</option>`)
+        // Custom checkbox-style options instead of a native <select>: the
+        // browser's own dropdown can only show one plain-text line per IP
+        // and only lets you pick one. Here every IP is its own toggle card
+        // showing its risk score/label right on the card (so it's visible
+        // without opening anything), and more than one can be expanded at
+        // once since a client app might want several fallback IPs.
+        const optionsHtml = hostGroup.entries
+          .map((entry, i) => {
+            const badgeClass = proxyRiskBadgeClass(entry.score);
+            const selected = i === 0; // lowest risk, since entries are pre-sorted ascending
+            const configButtons = entry.configs
+              .map(
+                (cfgItem) => `
+                  <button type="button" class="icon-btn" data-proxyip-link="${encodeURIComponent(cfgItem.link)}" aria-label="Copy ${escapeHtml(cfgItem.label)} config for ${escapeHtml(entry.ip)}">
+                    <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <span>${escapeHtml(cfgItem.label)}</span>
+                  </button>
+                `,
+              )
+              .join("");
+            return `
+              <div class="proxyip-ip-option${selected ? " selected" : ""}">
+                <button type="button" class="proxyip-ip-toggle" role="checkbox" aria-checked="${selected}">
+                  <span class="proxyip-ip-checkbox" aria-hidden="true"></span>
+                  <span class="proxyip-ip-addr">${escapeHtml(entry.ip)}</span>
+                  <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
+                </button>
+                <div class="proxyip-ip-configs">${configButtons}</div>
+              </div>
+            `;
+          })
           .join("");
         div.innerHTML = `
           <div class="proxyip-item-head">
             <span class="proxyip-item-host">${escapeHtml(hostGroup.host)}${poolTag}</span>
           </div>
-          <select class="proxyip-host-select" aria-label="Choose an IP for ${escapeHtml(hostGroup.host)}">${options}</select>
-          <div class="proxyip-item-configs"></div>
+          <div class="proxyip-ip-options">${optionsHtml}</div>
         `;
-        const select = div.querySelector(".proxyip-host-select");
-        const configsEl = div.querySelector(".proxyip-item-configs");
-        const renderSelected = () => {
-          const entry = hostGroup.entries[Number(select.value)];
-          configsEl.innerHTML = entry.configs
-            .map(
-              (cfgItem) => `
-                <button type="button" class="icon-btn" data-proxyip-link="${encodeURIComponent(cfgItem.link)}" aria-label="Copy ${escapeHtml(cfgItem.label)} config for ${escapeHtml(entry.ip)}">
-                  <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                  </svg>
-                  <span>${escapeHtml(cfgItem.label)}</span>
-                </button>
-              `,
-            )
-            .join("");
-        };
-        select.value = "0"; // lowest-risk IP, since entries are pre-sorted ascending
-        select.addEventListener("change", renderSelected);
-        renderSelected();
+        div.querySelectorAll(".proxyip-ip-toggle").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const option = btn.closest(".proxyip-ip-option");
+            const isSelected = option.classList.toggle("selected");
+            btn.setAttribute("aria-checked", String(isSelected));
+          });
+        });
         return div;
       }
 
@@ -2244,11 +2317,17 @@
           copyToClipboard(btn, link);
         });
 
-        const load = async () => {
+        const load = async (forceRefresh = false) => {
           list.innerHTML = `<div class="proxyip-empty">Loading ProxyIPs…</div>`;
           bar.innerHTML = "";
+          if (refreshBtn) refreshBtn.disabled = true;
           try {
-            const res = await fetch(url);
+            // ?refresh=1 bypasses the worker's own response caches so a
+            // click on Refresh actually re-checks each domain's current
+            // IP set (see handleProxyIpsInfo in src/routes.js) instead of
+            // just re-fetching the same cached JSON as the initial load.
+            const fetchUrl = forceRefresh ? `${url}${url.includes("?") ? "&" : "?"}refresh=1` : url;
+            const res = await fetch(fetchUrl);
             if (!res.ok) throw new Error("Request failed");
             const data = await res.json();
             const groups = (data.groups || []).filter((g) => g.hosts && g.hosts.length);
@@ -2262,10 +2341,12 @@
           } catch (e) {
             console.error("ProxyIPs load failed:", e);
             list.innerHTML = `<div class="proxyip-empty">Could not load ProxyIPs. Try refreshing.</div>`;
+          } finally {
+            if (refreshBtn) refreshBtn.disabled = false;
           }
         };
 
-        refreshBtn?.addEventListener("click", load);
+        refreshBtn?.addEventListener("click", () => load(true));
         await load();
       }
 
