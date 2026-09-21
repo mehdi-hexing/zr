@@ -138,7 +138,14 @@ export function withConfigOverrides(path, { nat64, proxyIP } = {}) {
     params.push(`nat64=${nat64 ? "on" : "off"}`);
   }
   if (proxyIP) {
-    params.push(`proxyip=${encodeURIComponent(proxyIP)}`);
+    // Not encodeURIComponent()'d: ":" is not a reserved delimiter inside a
+    // query value, and leaving it literal here means clients that only do
+    // a single decode pass on the outer link (many do) still end up with
+    // a clean "proxyip=1.2.3.4:443" instead of a mangled "...%3A443" (or
+    // worse, a doubly-escaped "...%253A443") in the ws path they connect
+    // with. parsePathOverrides() in network.js reads it back with a plain
+    // string split, so no decoding is required on the server side either.
+    params.push(`proxyip=${proxyIP}`);
   }
   if (!params.length) return path;
   const sep = path.includes("?") ? "&" : "?";
@@ -172,6 +179,17 @@ export const CORE_PRESETS = {
     },
   },
 };
+
+// Converts a 2-letter ISO country code into its flag emoji (regional
+// indicator symbols), e.g. "us" -> "🇺🇸". Used so country names in
+// subscription config remarks/tags carry more than just a bare code.
+export function countryCodeToFlagEmoji(countryCode) {
+  if (!countryCode || countryCode.length !== 2) return "";
+  const code = countryCode.toUpperCase();
+  const points = [...code].map((c) => 0x1f1e6 + (c.charCodeAt(0) - 65));
+  if (points.some((p) => p < 0x1f1e6 || p > 0x1f1ff)) return "";
+  return String.fromCodePoint(...points);
+}
 
 export function makeName(tag, proto) {
   return `${tag}-${proto.toUpperCase()}`;

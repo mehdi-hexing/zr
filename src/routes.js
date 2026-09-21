@@ -10,6 +10,7 @@ import {
   buildSettingsUrl,
   resolveIPv4ViaDoH,
   fetchDomainIpPool,
+  countryCodeToFlagEmoji,
 } from "./core.js";
 import panelB64 from "./panel.b64";
 const panelBytes = Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0));
@@ -25,7 +26,11 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
   const httpPorts = [80, 8080, 8880, 2052, 2082, 2086, 2095];
   let links = [];
   const isPagesDeployment = hostName.endsWith(".pages.dev");
-  const includeTcp = (core === "sb" || (core === "xray" && enhanced)) && !isPagesDeployment;
+  // Only xray has a "tcp" preset in CORE_PRESETS (see core.js); "sb" only
+  // defines "tls". Including core === "sb" here used to make buildLink()
+  // reach CORE_PRESETS.sb.tcp (undefined) and throw, silently truncating
+  // the whole /sb subscription partway through the IP loop below.
+  const includeTcp = core === "xray" && enhanced && !isPagesDeployment;
 
   mainDomains.forEach((domain, i) => {
     links.push(
@@ -337,14 +342,60 @@ async function buildProxyIpPool(cfg, ctx) {
 // once passed through buildLink/makeName — which transport it uses.
 function proxyEntryTag(entry, index) {
   const countryTag = entry.countryCode ? entry.countryCode.toUpperCase() : (entry.country || "XX").slice(0, 2).toUpperCase();
+  const flag = countryCodeToFlagEmoji(entry.countryCode);
   const hostTag = entry.hostType === "ip" ? "IP" : "Domain";
-  return `${countryTag}-${hostTag}-${index + 1}`;
+  return `${flag}${countryTag}-${hostTag}-${index + 1}`;
 }
 
-// Builds the ProxyIPs panel card data: groups the resolved pool (see
-// buildProxyIpPool above) by country (sorted low-to-high risk within a
-// country), and generates 1-2 ready-to-use configs per IP whose ws path
-// carries a `proxyip=` override (see withConfigOverrides / core.js and
+// Builds a ready-to-copy config pair (Xray + Singbox) for one resolved
+// pool entry, tagged the same way the /xray and /sb subscriptions tag
+// their own top-10 ProxyIP configs (see proxyEntryTag above), so a name
+// like "🇺🇸US-IP-1-TLS" means the same thing everywhere it shows up.
+function buildProxyEntryConfigs(entry, hostName, userID, index) {
+  const tag = proxyEntryTag(entry, index);
+  const proxyIP = `${entry.ip}:${entry.port}`;
+  const xray = buildLink({
+    core: "xray",
+    proto: "tls",
+    userID,
+    hostName,
+    address: hostName,
+    port: 443,
+    tag,
+    overrides: { proxyIP },
+  });
+  const sb = buildLink({
+    core: "sb",
+    proto: "tls",
+    userID,
+    hostName,
+    address: hostName,
+    port: 443,
+    tag,
+    overrides: { proxyIP },
+  });
+  return {
+    host: entry.host,
+    ip: entry.ip,
+    hostType: entry.hostType,
+    risk: entry.risk,
+    score: entry.score,
+    configs: [
+      { label: "Xray", link: xray },
+      { label: "Singbox", link: sb },
+    ],
+  };
+}
+
+// Builds the ProxyIPs panel card data. Entries are grouped two levels
+// deep:
+//   - by country, so the panel can render one button per country (lowest
+//     risk first, see the outer sort below);
+//   - within a country, by pool host, so a single domain that resolves to
+//     several IPs in that country becomes ONE dropdown (defaulting to its
+//     lowest-risk IP) instead of several indistinguishable flat rows.
+// Every IP gets 1-2 ready-to-use configs whose ws path carries a
+// `proxyip=` override (see withConfigOverrides / core.js and
 // parsePathOverrides / network.js) so that IP becomes that config's sole
 // fallback route.
 export async function handleProxyIpsInfo(request, cfg, hostName, ctx) {
@@ -362,58 +413,48 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx) {
 
     const enriched = await buildProxyIpPool(cfg, ctx);
 
-    const groupsMap = new Map();
+    const countryMap = new Map();
     enriched.forEach((entry) => {
-      const key = entry.country || "Unknown";
-      if (!groupsMap.has(key)) {
-        groupsMap.set(key, { country: key, countryCode: entry.countryCode || "", entries: [] });
+      const countryKey = entry.country || "Unknown";
+      if (!countryMap.has(countryKey)) {
+        countryMap.set(countryKey, { country: countryKey, countryCode: entry.countryCode || "", hostsMap: new Map() });
       }
-      groupsMap.get(key).entries.push(entry);
+      const countryGroup = countryMap.get(countryKey);
+      if (!countryGroup.countryCode && entry.countryCode) countryGroup.countryCode = entry.countryCode;
+      const hostKey = entry.host;
+      if (!countryGroup.hostsMap.has(hostKey)) {
+        countryGroup.hostsMap.set(hostKey, { host: hostKey, hostType: entry.hostType, entries: [] });
+      }
+      countryGroup.hostsMap.get(hostKey).entries.push(entry);
     });
 
-    const groups = [...groupsMap.values()]
-      .map((group) => ({
-        country: group.country,
-        countryCode: group.countryCode,
-        entries: [...group.entries]
-          .sort((a, b) => (a.score ?? 999) - (b.score ?? 999))
-          .map((entry, i) => {
-            const tag = `${group.country}-${i + 1}`;
-            const proxyIP = `${entry.ip}:${entry.port}`;
-            const xray = buildLink({
-              core: "xray",
-              proto: "tls",
-              userID: cfg.userID,
-              hostName,
-              address: hostName,
-              port: 443,
-              tag,
-              overrides: { proxyIP },
-            });
-            const sb = buildLink({
-              core: "sb",
-              proto: "tls",
-              userID: cfg.userID,
-              hostName,
-              address: hostName,
-              port: 443,
-              tag,
-              overrides: { proxyIP },
-            });
+    const groups = [...countryMap.values()]
+      .map((countryGroup) => {
+        const hosts = [...countryGroup.hostsMap.values()]
+          .map((hostGroup) => {
+            const sortedEntries = [...hostGroup.entries].sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
             return {
-              host: entry.host,
-              ip: entry.ip,
-              hostType: entry.hostType,
-              risk: entry.risk,
-              score: entry.score,
-              configs: [
-                { label: "Xray", link: xray },
-                { label: "Singbox", link: sb },
-              ],
+              host: hostGroup.host,
+              hostType: hostGroup.hostType,
+              entries: sortedEntries.map((entry, i) => buildProxyEntryConfigs(entry, hostName, cfg.userID, i)),
             };
-          }),
-      }))
-      .sort((a, b) => a.country.localeCompare(b.country));
+          })
+          .sort((a, b) => (a.entries[0]?.score ?? 999) - (b.entries[0]?.score ?? 999));
+
+        const lowestEntry = hosts[0]?.entries[0];
+        return {
+          country: countryGroup.country,
+          countryCode: countryGroup.countryCode,
+          flag: countryCodeToFlagEmoji(countryGroup.countryCode),
+          lowestScore: lowestEntry?.score ?? null,
+          lowestRisk: lowestEntry?.risk ?? "Unknown",
+          hosts,
+        };
+      })
+      // Country - risk, ascending: the country holding the single lowest-risk
+      // IP overall is shown (as a button) first. Countries with no usable
+      // score (lookup failed for every entry) sort to the end.
+      .sort((a, b) => (a.lowestScore ?? 999) - (b.lowestScore ?? 999));
 
     const response = new Response(JSON.stringify({ groups }), { headers });
     if (groups.length) ctx.waitUntil(cache.put(cacheKey, response.clone()));
@@ -454,6 +495,33 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
     enhanced: true,
   });
 
+  // Precomputed on/off pair for the NAT64 card's copy button. Building
+  // both full links here (instead of patching the plain xray-config link
+  // client-side, which left the copied config's name unchanged and made
+  // it look identical to the regular config) guarantees the copied
+  // config is always properly tagged "NAT64" and keeps every other field
+  // (alpn included) exactly as buildLink/CORE_PRESETS defines it.
+  const nat64On = buildLink({
+    core: "xray",
+    proto: "tls",
+    userID,
+    hostName,
+    address: hostName,
+    port: 443,
+    tag: "NAT64",
+    overrides: { nat64: true },
+  });
+  const nat64Off = buildLink({
+    core: "xray",
+    proto: "tls",
+    userID,
+    hostName,
+    address: hostName,
+    port: 443,
+    tag: "NAT64",
+    overrides: { nat64: false },
+  });
+
   const settingsUrl = buildSettingsUrl(workerName);
   const workerLabel = hostName.split(".")[0] || "INDEX";
   const encodedSubName = encodeURIComponent(workerLabel);
@@ -470,6 +538,8 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
   .replace(/{{CONFIG_FREEDOM}}/g, freedom)
   .replace(/{{CONFIG_PATTNG}}/g, pattng)
   .replace(/{{NAT64_DEFAULT}}/g, nat64 ? "on" : "off")
+  .replace(/{{CONFIG_NAT64_ON}}/g, nat64On)
+  .replace(/{{CONFIG_NAT64_OFF}}/g, nat64Off)
   .replace(/{{URL_PROXYIPS}}/g, subProxyIpsUrl)
   .replace(/{{URL_WORKER_SETTINGS}}/g, settingsUrl)
   .replace(/{{URL_V2RAYNG_ENHANCED}}/g, `${SENS.v2rayng()}${subXrayUrlVEnhanced}`)
