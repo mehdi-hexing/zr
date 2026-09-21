@@ -2105,7 +2105,7 @@
         return String.fromCodePoint(...points);
       }
 
-      function renderProxyEntryRow(entry, extraLabel) {
+      function renderProxyEntryRow(entry, poolTag) {
         const badgeClass = proxyRiskBadgeClass(entry.score);
         const configButtons = entry.configs
           .map(
@@ -2120,9 +2120,12 @@
             `,
           )
           .join("");
+        // poolTag is trusted markup we built ourselves (see renderProxyHostGroup)
+        // and must NOT be run through escapeHtml, or the <span> gets shown as
+        // literal text instead of rendering as the little "pool"/"static" pill.
         return `
           <div class="proxyip-item-head">
-            <span class="proxyip-item-host">${escapeHtml(extraLabel ?? `${entry.host} (${entry.ip})`)}</span>
+            <span class="proxyip-item-host">${escapeHtml(`${entry.host} (${entry.ip})`)}${poolTag ?? ""}</span>
             <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
           </div>
           <div class="proxyip-item-configs">${configButtons}</div>
@@ -2144,7 +2147,7 @@
           const entry = hostGroup.entries[0];
           const div = document.createElement("div");
           div.className = "proxyip-item";
-          div.innerHTML = renderProxyEntryRow(entry, `${entry.host} (${entry.ip})${poolTag}`);
+          div.innerHTML = renderProxyEntryRow(entry, poolTag);
           return div;
         }
 
