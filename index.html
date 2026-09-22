@@ -1190,8 +1190,8 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 8px;
-        padding: 6px 8px;
+        gap: 10px;
+        padding: 10px 12px;
         margin-bottom: 8px;
         background: var(--bgColor-inset);
         border: 1px solid var(--borderColor-muted);
@@ -1230,17 +1230,6 @@
         text-align: right;
       }
 
-      .proxyip-ip-row {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .proxyip-ip-row .proxyip-ip-toggle {
-        flex: 1;
-        min-width: 0;
-      }
-
       .proxyip-item-host-group {
         display: flex;
         align-items: center;
@@ -1263,45 +1252,18 @@
         background: var(--bgColor-inset);
       }
 
+      /* A single control does double duty: checking it both marks the IP
+         selected for bulk-copy (see updateProxyBulkBar) AND expands its
+         Xray/Singbox buttons below - there's no separate "pick one to
+         preview" toggle anymore, since two different checkboxes doing two
+         related things on the same row was confusing to use. */
       .proxyip-ip-toggle {
         display: flex;
         align-items: center;
         gap: 8px;
         width: 100%;
         padding: 6px 8px;
-        border: none;
-        background: transparent;
-        color: inherit;
-        font: inherit;
-        text-align: left;
         cursor: pointer;
-      }
-
-      .proxyip-ip-checkbox {
-        flex-shrink: 0;
-        width: 14px;
-        height: 14px;
-        border: 1.5px solid var(--borderColor-default);
-        border-radius: 3px;
-        position: relative;
-        transition: background-color var(--transition), border-color var(--transition);
-      }
-
-      .proxyip-ip-option.selected .proxyip-ip-checkbox {
-        background: var(--accent-emphasis);
-        border-color: var(--accent-emphasis);
-      }
-
-      .proxyip-ip-option.selected .proxyip-ip-checkbox::after {
-        content: "";
-        position: absolute;
-        left: 3px;
-        top: 0px;
-        width: 4px;
-        height: 8px;
-        border: solid #fff;
-        border-width: 0 2px 2px 0;
-        transform: rotate(45deg);
       }
 
       .proxyip-ip-addr {
@@ -1318,7 +1280,11 @@
         display: none;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 6px;
-        padding: 8px 8px 8px 30px;
+        /* Symmetric, and matching .proxyip-ip-toggle's own 8px horizontal
+           padding above it, so the buttons line up with the row instead
+           of sitting under an arbitrary indent that only happened to
+           match the old layout. */
+        padding: 8px;
         /* Distinct from .icon-btn's own background (--bgColor-overlay) so
            the copy buttons don't visually blend into their own container -
            see .proxyip-item-configs .icon-btn below for the matching fix
@@ -1820,6 +1786,7 @@
               <svg class="refresh-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
               </svg>
+              Refresh
             </button>
           </div>
           <div id="proxyip-country-buttons" class="proxyip-country-buttons"></div>
@@ -2357,15 +2324,12 @@
             counter.n += 1;
             return `
               <div class="proxyip-ip-option${selected ? " selected" : ""}">
-                <div class="proxyip-ip-row">
-                  <input type="checkbox" class="proxyip-select" data-xray-link="${encodeURIComponent(xrayCfg?.link ?? "")}" data-sb-link="${encodeURIComponent(sbCfg?.link ?? "")}" aria-label="Select ${escapeHtml(entry.ip)} for bulk copy">
+                <label class="proxyip-ip-toggle">
+                  <input type="checkbox" class="proxyip-select"${selected ? " checked" : ""} data-xray-link="${encodeURIComponent(xrayCfg?.link ?? "")}" data-sb-link="${encodeURIComponent(sbCfg?.link ?? "")}" aria-label="Select ${escapeHtml(entry.ip)} - shows its config and marks it for bulk copy">
                   <span class="proxyip-index">${counter.n}</span>
-                  <button type="button" class="proxyip-ip-toggle" role="checkbox" aria-checked="${selected}">
-                    <span class="proxyip-ip-checkbox" aria-hidden="true"></span>
-                    <span class="proxyip-ip-addr">${escapeHtml(entry.ip)}</span>
-                    <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
-                  </button>
-                </div>
+                  <span class="proxyip-ip-addr">${escapeHtml(entry.ip)}</span>
+                  <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
+                </label>
                 <div class="proxyip-ip-configs">${configButtons}</div>
               </div>
             `;
@@ -2377,13 +2341,6 @@
           </div>
           <div class="proxyip-ip-options">${optionsHtml}</div>
         `;
-        div.querySelectorAll(".proxyip-ip-toggle").forEach((btn) => {
-          btn.addEventListener("click", () => {
-            const option = btn.closest(".proxyip-ip-option");
-            const isSelected = option.classList.toggle("selected");
-            btn.setAttribute("aria-checked", String(isSelected));
-          });
-        });
         return div;
       }
 
@@ -2482,9 +2439,16 @@
         });
 
         // Same delegation approach for the per-row selection checkboxes -
-        // one listener covers every checkbox across every re-render.
+        // one listener covers every checkbox across every re-render. When
+        // the checkbox belongs to a domain group's IP option, it also
+        // drives that option's expand/collapse (the "selected" class) -
+        // one checkbox now does both jobs instead of two separate
+        // checkbox-shaped controls on the same row.
         list.addEventListener("change", (e) => {
-          if (e.target.classList.contains("proxyip-select")) updateProxyBulkBar();
+          if (!e.target.classList.contains("proxyip-select")) return;
+          const option = e.target.closest(".proxyip-ip-option");
+          if (option) option.classList.toggle("selected", e.target.checked);
+          updateProxyBulkBar();
         });
 
         const bulkCopyXrayBtn = document.getElementById("proxyip-bulk-copy-xray");
