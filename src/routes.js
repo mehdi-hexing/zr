@@ -256,26 +256,13 @@ export async function handleProxyHostInfo(request, env, ctx) {
   }
 }
 
-async function geolocateIp(ip) {
-  try {
-    const res = await safeFetch(`https://ipapi.co/${ip}/json/`, {}, 4000);
-    if (!res.ok) return { country: "Unknown", countryCode: "", city: "", org: "" };
-    const data = await res.json();
-    if (data.error) return { country: "Unknown", countryCode: "", city: "", org: "" };
-    return {
-      country: data.country_name || "Unknown",
-      countryCode: (data.country_code || "").toLowerCase(),
-      city: data.city || "",
-      org: data.org || "",
-    };
-  } catch (e) {
-    return { country: "Unknown", countryCode: "", city: "", org: "" };
-  }
-}
-
-async function fetchIpRisk(ip) {
-  let threatScore = 0;
-  let risk = "Unknown";
+// harmonica.workers.dev already returns full geo/ISP data (its `details`
+// object: country, country_code, city, isp, organization, ...) right
+// alongside the fraud score (`info`), so one call here covers what used
+// to take two separate outbound requests (a dedicated geolocation API
+// plus this one for risk). One request is also just less exposed to
+// rate-limiting than two.
+async function FetchIPData(ip) {
   try {
     const res = await safeFetch(
       `https://api.harmonica.workers.dev/api/${ip}`,
@@ -288,23 +275,31 @@ async function fetchIpRisk(ip) {
       },
       4000,
     );
-    if (res.ok) {
-      const data = await res.json();
-      if (data) {
-        const targetObj = data.info || data;
-        threatScore = targetObj.score ?? targetObj.fraud_score ?? targetObj.threatScore ?? 0;
-        if (targetObj.risk) risk = targetObj.risk.charAt(0).toUpperCase() + targetObj.risk.slice(1);
-      }
-    }
-  } catch (e) {}
-  return { score: threatScore, risk };
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data) return null;
+    const info = data.info || {};
+    const details = data.details || {};
+    const threatScore = info.score ?? info.fraud_score ?? info.threatScore ?? 0;
+    const risk = info.risk ? info.risk.charAt(0).toUpperCase() + info.risk.slice(1) : "Unknown";
+    return {
+      country: details.country || "Unknown",
+      countryCode: (details.country_code || "").toLowerCase(),
+      city: details.city || "",
+      org: details.isp || details.organization || "",
+      score: threatScore,
+      risk,
+    };
+  } catch (e) {
+    return null;
+  }
 }
 
 // Cache-API-backed cache for a single IP's geo+risk lookup (6h TTL, same
 // as the pool cache below). A later refresh within that window reuses
-// it instead of re-hitting ipapi.co/harmonica, which is both what keeps
-// the panel from silently losing already-known IPs on refresh and what
-// keeps it from re-tripping those services' rate limits every time. A
+// it instead of re-hitting harmonica, which is both what keeps the panel
+// from silently losing already-known IPs on refresh and what keeps it
+// from re-tripping that service's rate limits every time. A
 // failed/"Unknown" lookup is deliberately NOT cached, so the next
 // refresh gets to retry it rather than being stuck with "Unknown"
 // forever. Unlike a KV-backed cache, this expires on its own - so an IP
@@ -315,8 +310,7 @@ async function getIpMeta(ctx, ip) {
   const cacheKey = `ipmeta:${ip}`;
   const cached = await cacheGetJson(cacheKey);
   if (cached) return cached;
-  const [geo, riskInfo] = await Promise.all([geolocateIp(ip), fetchIpRisk(ip)]);
-  const meta = { ...geo, ...riskInfo };
+  const meta = (await FetchIPData(ip)) || { country: "Unknown", countryCode: "", city: "", org: "", score: 0, risk: "Unknown" };
   if (meta.country && meta.country !== "Unknown") await cachePutJson(ctx, cacheKey, meta);
   return meta;
 }
@@ -505,7 +499,7 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
     // caches below and re-resolve every pool host's CURRENT IP set (so an
     // IP a domain no longer resolves to drops off, and a newly-added one
     // shows up) - see buildProxyIpPool. Already-known IPs still don't
-    // re-hit ipapi.co/harmonica though: that's what the
+    // re-hit harmonica though: that's what the
     // getIpMeta/enrichWithPersistentCache cache in buildProxyIpPool is for.
     const forceRefresh = url.searchParams.get("refresh") === "1";
 
