@@ -184,8 +184,36 @@ export const CORE_PRESETS = {
       alpn: "http/1.1",
       extra: CONST.ED_PARAMS,
     },
+    tcp: {
+      path: () => generateRandomPath(18),
+      security: "none",
+      fp: "chrome",
+      alpn: "http/1.1",
+      extra: CONST.ED_PARAMS,
+    },
   },
 };
+
+// Cloudflare's own edge only proxies these specific ports - anything
+// else never reaches the Worker/Pages Function at all, on either a
+// workers.dev subdomain or a custom domain. Split into the TLS-capable
+// set (fronted with Cloudflare's own certificate, so security:"tls" in
+// the config) and the plaintext set (security:"none" - still runs over
+// the ws transport, just without an extra TLS layer on top).
+export const CF_TLS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
+export const CF_NON_TLS_PORTS = [80, 8080, 2052, 2082, 2086, 2095, 8880];
+
+// Picks a random (port, proto) pair for a client-facing ProxyIPs config,
+// so repeated copies don't all hand out the exact same "port 443, TLS"
+// config. A *.pages.dev deployment only fronts the TLS port set - Pages
+// Functions aren't reachable on the plaintext ports the way a Worker is
+// - so non-TLS/"tcp" configs are only offered off pages.dev.
+export function pickRandomProxyPort(isPagesDeployment) {
+  const pool = isPagesDeployment
+    ? CF_TLS_PORTS.map((port) => ({ port, proto: "tls" }))
+    : [...CF_TLS_PORTS.map((port) => ({ port, proto: "tls" })), ...CF_NON_TLS_PORTS.map((port) => ({ port, proto: "tcp" }))];
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 // Converts a 2-letter ISO country code into its flag emoji (regional
 // indicator symbols), e.g. "us" -> "🇺🇸". Used so country names in

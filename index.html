@@ -1186,6 +1186,69 @@
         opacity: 0.85;
       }
 
+      .proxyip-bulk-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+        background: var(--bgColor-inset);
+        border: 1px solid var(--borderColor-muted);
+        border-radius: var(--radius-md);
+      }
+
+      .proxyip-bulk-count {
+        font-size: 11px;
+        color: var(--fgColor-muted);
+        white-space: nowrap;
+      }
+
+      .proxyip-bulk-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .proxyip-bulk-actions .icon-btn {
+        font-size: 11px;
+      }
+
+      .proxyip-select {
+        width: 15px;
+        height: 15px;
+        flex: none;
+        accent-color: var(--accent-emphasis, #2f81f7);
+        cursor: pointer;
+      }
+
+      .proxyip-index {
+        flex: none;
+        min-width: 18px;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        color: var(--fgColor-muted);
+        text-align: right;
+      }
+
+      .proxyip-ip-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .proxyip-ip-row .proxyip-ip-toggle {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .proxyip-item-host-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex: 1;
+      }
+
       .proxyip-ip-options {
         display: flex;
         flex-direction: column;
@@ -1760,6 +1823,25 @@
             </button>
           </div>
           <div id="proxyip-country-buttons" class="proxyip-country-buttons"></div>
+          <div id="proxyip-bulk-bar" class="proxyip-bulk-bar">
+            <span id="proxyip-bulk-count" class="proxyip-bulk-count">0 selected</span>
+            <div class="proxyip-bulk-actions">
+              <button type="button" id="proxyip-bulk-copy-xray" class="icon-btn" disabled>
+                <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>Copy Xray</span>
+              </button>
+              <button type="button" id="proxyip-bulk-copy-sb" class="icon-btn" disabled>
+                <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>Copy Singbox</span>
+              </button>
+            </div>
+          </div>
           <div id="proxyip-list" class="proxyip-list">
             <div class="proxyip-empty">Loading ProxyIPs…</div>
           </div>
@@ -2186,8 +2268,10 @@
         return String.fromCodePoint(...points);
       }
 
-      function renderProxyEntryRow(entry, poolTag) {
+      function renderProxyEntryRow(entry, poolTag, index) {
         const badgeClass = proxyRiskBadgeClass(entry.score);
+        const xrayCfg = entry.configs.find((c) => c.label === "Xray");
+        const sbCfg = entry.configs.find((c) => c.label === "Singbox");
         const configButtons = entry.configs
           .map(
             (cfgItem) => `
@@ -2206,7 +2290,11 @@
         // literal text instead of rendering as the little "pool"/"static" pill.
         return `
           <div class="proxyip-item-head">
-            <span class="proxyip-item-host">${escapeHtml(`${entry.host} (${entry.ip})`)}${poolTag ?? ""}</span>
+            <div class="proxyip-item-host-group">
+              <input type="checkbox" class="proxyip-select" data-xray-link="${encodeURIComponent(xrayCfg?.link ?? "")}" data-sb-link="${encodeURIComponent(sbCfg?.link ?? "")}" aria-label="Select ${escapeHtml(entry.ip)} for bulk copy">
+              <span class="proxyip-index">${index}</span>
+              <span class="proxyip-item-host">${escapeHtml(`${entry.host} (${entry.ip})`)}${poolTag ?? ""}</span>
+            </div>
             <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
           </div>
           <div class="proxyip-item-configs">${configButtons}</div>
@@ -2219,16 +2307,23 @@
       // of their IPs - defaulting to the lowest-risk one (entries are
       // already sorted ascending by risk server-side) - and the copy
       // buttons update to that selection.
-      function renderProxyHostGroup(hostGroup) {
+      //
+      // `counter` is a single mutable { n } shared across the whole
+      // currently-rendered country list (see renderProxyIpCountry) so
+      // every individual IP - flat row or one option inside a domain's
+      // dropdown - gets one running "#1, #2, ..." index, not a index
+      // that resets per host group.
+      function renderProxyHostGroup(hostGroup, counter) {
         const poolTag = hostGroup.hostType === "domain" ?
           `<span class="pool-tag" title="Resolved from a domain that may back more IPs than shown">pool</span>` :
           `<span class="pool-tag" title="Fixed IP from the ProxyIP config">static</span>`;
 
         if (hostGroup.entries.length <= 1) {
           const entry = hostGroup.entries[0];
+          counter.n += 1;
           const div = document.createElement("div");
           div.className = "proxyip-item";
-          div.innerHTML = renderProxyEntryRow(entry, poolTag);
+          div.innerHTML = renderProxyEntryRow(entry, poolTag, counter.n);
           return div;
         }
 
@@ -2244,6 +2339,8 @@
           .map((entry, i) => {
             const badgeClass = proxyRiskBadgeClass(entry.score);
             const selected = i === 0; // lowest risk, since entries are pre-sorted ascending
+            const xrayCfg = entry.configs.find((c) => c.label === "Xray");
+            const sbCfg = entry.configs.find((c) => c.label === "Singbox");
             const configButtons = entry.configs
               .map(
                 (cfgItem) => `
@@ -2257,13 +2354,18 @@
                 `,
               )
               .join("");
+            counter.n += 1;
             return `
               <div class="proxyip-ip-option${selected ? " selected" : ""}">
-                <button type="button" class="proxyip-ip-toggle" role="checkbox" aria-checked="${selected}">
-                  <span class="proxyip-ip-checkbox" aria-hidden="true"></span>
-                  <span class="proxyip-ip-addr">${escapeHtml(entry.ip)}</span>
-                  <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
-                </button>
+                <div class="proxyip-ip-row">
+                  <input type="checkbox" class="proxyip-select" data-xray-link="${encodeURIComponent(xrayCfg?.link ?? "")}" data-sb-link="${encodeURIComponent(sbCfg?.link ?? "")}" aria-label="Select ${escapeHtml(entry.ip)} for bulk copy">
+                  <span class="proxyip-index">${counter.n}</span>
+                  <button type="button" class="proxyip-ip-toggle" role="checkbox" aria-checked="${selected}">
+                    <span class="proxyip-ip-checkbox" aria-hidden="true"></span>
+                    <span class="proxyip-ip-addr">${escapeHtml(entry.ip)}</span>
+                    <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
+                  </button>
+                </div>
                 <div class="proxyip-ip-configs">${configButtons}</div>
               </div>
             `;
@@ -2291,10 +2393,47 @@
         const group = groups.find((g) => g.country === countryName);
         if (!group || !group.hosts.length) {
           list.innerHTML = `<div class="proxyip-empty">No ProxyIPs found for this country.</div>`;
+          updateProxyBulkBar();
           return;
         }
         list.innerHTML = "";
-        group.hosts.forEach((hostGroup) => list.appendChild(renderProxyHostGroup(hostGroup)));
+        const counter = { n: 0 };
+        group.hosts.forEach((hostGroup) => list.appendChild(renderProxyHostGroup(hostGroup, counter)));
+        // Every render is a fresh set of checkboxes (all unchecked), so the
+        // bulk bar's count/buttons need resetting to match - otherwise a
+        // stale count could sit there pointing at elements that no longer
+        // exist after switching country or refreshing.
+        updateProxyBulkBar();
+      }
+
+      // Keeps the "N selected" label and the two bulk-copy buttons in sync
+      // with however many .proxyip-select checkboxes are currently ticked
+      // inside #proxyip-list. Called after every re-render and on every
+      // checkbox change.
+      function updateProxyBulkBar() {
+        const list = document.getElementById("proxyip-list");
+        const countEl = document.getElementById("proxyip-bulk-count");
+        const xrayBtn = document.getElementById("proxyip-bulk-copy-xray");
+        const sbBtn = document.getElementById("proxyip-bulk-copy-sb");
+        const checked = list ? list.querySelectorAll(".proxyip-select:checked").length : 0;
+        if (countEl) countEl.textContent = `${checked} selected`;
+        if (xrayBtn) xrayBtn.disabled = checked === 0;
+        if (sbBtn) sbBtn.disabled = checked === 0;
+      }
+
+      // Joins every checked entry's config (by data-xray-link or
+      // data-sb-link) into one newline-separated block and copies it -
+      // the same "flat list of vless:// links" shape as an /xray or /sb
+      // subscription, just limited to whatever the user hand-picked.
+      function copySelectedProxyConfigs(button, attr) {
+        const list = document.getElementById("proxyip-list");
+        if (!list) return;
+        const links = [...list.querySelectorAll(".proxyip-select:checked")]
+          .map((cb) => cb.getAttribute(attr))
+          .filter(Boolean)
+          .map((encoded) => decodeURIComponent(encoded));
+        if (!links.length) return;
+        copyToClipboard(button, links.join("\n"));
       }
 
       function renderProxyCountryButtons(groups, activeCountry, onSelect) {
@@ -2341,6 +2480,17 @@
           const link = decodeURIComponent(btn.getAttribute("data-proxyip-link"));
           copyToClipboard(btn, link);
         });
+
+        // Same delegation approach for the per-row selection checkboxes -
+        // one listener covers every checkbox across every re-render.
+        list.addEventListener("change", (e) => {
+          if (e.target.classList.contains("proxyip-select")) updateProxyBulkBar();
+        });
+
+        const bulkCopyXrayBtn = document.getElementById("proxyip-bulk-copy-xray");
+        const bulkCopySbBtn = document.getElementById("proxyip-bulk-copy-sb");
+        bulkCopyXrayBtn?.addEventListener("click", () => copySelectedProxyConfigs(bulkCopyXrayBtn, "data-xray-link"));
+        bulkCopySbBtn?.addEventListener("click", () => copySelectedProxyConfigs(bulkCopySbBtn, "data-sb-link"));
 
         const load = async (forceRefresh = false) => {
           list.innerHTML = `<div class="proxyip-empty">Loading ProxyIPs…</div>`;

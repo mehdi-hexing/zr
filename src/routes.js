@@ -13,6 +13,7 @@ import {
   countryCodeToFlagEmoji,
   cacheGetJson,
   cachePutJson,
+  pickRandomProxyPort,
 } from "./core.js";
 import panelB64 from "./panel.b64";
 const panelBytes = Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0));
@@ -435,26 +436,35 @@ function proxyEntryTag(entry, index) {
 // pool entry, tagged the same way the /xray and /sb subscriptions tag
 // their own top-10 ProxyIP configs (see proxyEntryTag above), so a name
 // like "🇺🇸US-IP-1-TLS" means the same thing everywhere it shows up.
+//
+// The client-facing port+transport (NOT the proxyIP override, which
+// stays entry.ip:entry.port) is randomized per config, per call - so a
+// refresh doesn't hand back the exact same "port 443, TLS" pair for
+// every single entry. See pickRandomProxyPort() in core.js for why
+// *.pages.dev only ever gets a TLS port back.
 function buildProxyEntryConfigs(entry, hostName, userID, index) {
   const tag = proxyEntryTag(entry, index);
   const proxyIP = `${entry.ip}:${entry.port}`;
+  const isPagesDeployment = hostName.endsWith(".pages.dev");
+  const xrayPort = pickRandomProxyPort(isPagesDeployment);
+  const sbPort = pickRandomProxyPort(isPagesDeployment);
   const xray = buildLink({
     core: "xray",
-    proto: "tls",
+    proto: xrayPort.proto,
     userID,
     hostName,
     address: hostName,
-    port: 443,
+    port: xrayPort.port,
     tag,
     overrides: { proxyIP },
   });
   const sb = buildLink({
     core: "sb",
-    proto: "tls",
+    proto: sbPort.proto,
     userID,
     hostName,
     address: hostName,
-    port: 443,
+    port: sbPort.port,
     tag,
     overrides: { proxyIP },
   });
