@@ -94,7 +94,7 @@ export default {
       }
 
       if (url.pathname === "/resolve-domain") return handleResolveDomain(request);
-      if (url.pathname === "/proxy-host-info") return handleProxyHostInfo(request, env);
+      if (url.pathname === "/proxy-host-info") return handleProxyHostInfo(request, env, ctx);
       if (url.pathname === "/my-connection") return handleMyConnection(request, env, ctx);
       if (url.pathname.startsWith(`/proxy-ips/${cfg.userID}`))
         return handleProxyIpsInfo(request, cfg, url.hostname, ctx, env);

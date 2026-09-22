@@ -1253,14 +1253,19 @@
 
       .proxyip-ip-configs {
         display: none;
-        flex-wrap: wrap;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 6px;
-        padding: 0 8px 8px 30px;
-        background: var(--bgColor-overlay);
+        padding: 8px 8px 8px 30px;
+        /* Distinct from .icon-btn's own background (--bgColor-overlay) so
+           the copy buttons don't visually blend into their own container -
+           see .proxyip-item-configs .icon-btn below for the matching fix
+           on the single-IP layout. */
+        background: var(--bgColor-inset);
+        border-top: 1px solid var(--borderColor-muted);
       }
 
       .proxyip-ip-option.selected .proxyip-ip-configs {
-        display: flex;
+        display: grid;
       }
 
       .proxyip-list {
@@ -1317,10 +1322,30 @@
         gap: 6px;
       }
 
-      .proxyip-item-configs .icon-btn {
+      .proxyip-item-configs .icon-btn,
+      .proxyip-ip-configs .icon-btn {
         width: 100%;
         gap: 5px;
         font-size: 11px;
+      }
+
+      /* Both copy-config button locations (single-IP row and the
+         expanded multi-IP dropdown) sit on --bgColor-inset containers,
+         so give them their own lighter fill + accent-tinted border -
+         otherwise they read as flat/illegible against the surrounding
+         card instead of as clickable buttons. */
+      .proxyip-item-configs .icon-btn,
+      .proxyip-ip-configs .icon-btn {
+        background: var(--bgColor-muted);
+        border-color: var(--borderColor-default);
+        color: var(--fgColor-default);
+      }
+
+      .proxyip-item-configs .icon-btn:hover,
+      .proxyip-ip-configs .icon-btn:hover {
+        background: var(--accent-muted);
+        border-color: var(--accent-emphasis);
+        color: #79c0ff;
       }
 
       .proxyip-empty {
@@ -2320,7 +2345,14 @@
         const load = async (forceRefresh = false) => {
           list.innerHTML = `<div class="proxyip-empty">Loading ProxyIPs…</div>`;
           bar.innerHTML = "";
+          const icon = refreshBtn?.querySelector(".refresh-icon");
           if (refreshBtn) refreshBtn.disabled = true;
+          // Same spin-while-loading treatment as the "Refresh IP
+          // information" button above this card (see the
+          // "refresh-ip-info" click handler) - both refresh buttons
+          // should look and behave the same way while their fetch is in
+          // flight.
+          if (icon) icon.style.animation = "spin 1s linear infinite";
           try {
             // ?refresh=1 bypasses the worker's own response caches so a
             // click on Refresh actually re-checks each domain's current
@@ -2342,7 +2374,10 @@
             console.error("ProxyIPs load failed:", e);
             list.innerHTML = `<div class="proxyip-empty">Could not load ProxyIPs. Try refreshing.</div>`;
           } finally {
-            if (refreshBtn) refreshBtn.disabled = false;
+            setTimeout(() => {
+              if (refreshBtn) refreshBtn.disabled = false;
+              if (icon) icon.style.animation = "";
+            }, 1000);
           }
         };
 

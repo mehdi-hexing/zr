@@ -11,8 +11,8 @@ import {
   resolveIPv4ViaDoH,
   fetchDomainIpPool,
   countryCodeToFlagEmoji,
-  kvGetJson,
-  kvPutJson,
+  cacheGetJson,
+  cachePutJson,
 } from "./core.js";
 import panelB64 from "./panel.b64";
 const panelBytes = Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0));
@@ -129,7 +129,7 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
   // makeName() appends the transport (TLS/TCP) on top of that.
   if (cfg) {
     try {
-      const pool = await buildProxyIpPool(cfg, ctx, env);
+      const pool = await buildProxyIpPool(cfg, ctx);
       const top10 = [...pool].sort((a, b) => (a.score ?? 999) - (b.score ?? 999)).slice(0, 10);
       top10.forEach((entry, i) => {
         const tag = proxyEntryTag(entry, i);
@@ -225,8 +225,8 @@ export async function handleResolveDomain(request) {
 // https://ipapi.co/...) - meaning that second lookup ran from the
 // visitor's own IP/browser, not the worker's. This does the DNS
 // resolution + geolocation server-side instead, in one call, reusing the
-// same KV-backed per-IP cache as the ProxyIPs pool.
-export async function handleProxyHostInfo(request, env) {
+// same Cache-API-backed per-IP cache as the ProxyIPs pool.
+export async function handleProxyHostInfo(request, env, ctx) {
   const url = new URL(request.url);
   const host = url.searchParams.get("host");
   const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
@@ -239,7 +239,7 @@ export async function handleProxyHostInfo(request, env) {
       if (!resolved) return new Response(JSON.stringify({ error: true, reason: "Could not resolve host" }), { headers });
       ip = resolved;
     }
-    const meta = await getIpMeta(env, ip);
+    const meta = await getIpMeta(ctx, ip);
     return new Response(
       JSON.stringify({
         ip,
@@ -299,21 +299,24 @@ async function fetchIpRisk(ip) {
   return { score: threatScore, risk };
 }
 
-// KV-backed cache for a single IP's geo+risk lookup. Once an IP resolves
-// to real data (not "Unknown"), it's kept indefinitely - a later refresh
-// reuses it instead of re-hitting ipapi.co/harmonica, which is both what
-// keeps the panel from silently losing already-known IPs on refresh and
-// what keeps it from re-tripping those services' rate limits every time.
-// A failed/"Unknown" lookup is deliberately NOT cached, so the next
-// refresh gets to retry it rather than being stuck with "Unknown" forever.
-async function getIpMeta(env, ip) {
-  const kv = env?.PROXY_GEO_KV;
+// Cache-API-backed cache for a single IP's geo+risk lookup (6h TTL, same
+// as the pool cache below). A later refresh within that window reuses
+// it instead of re-hitting ipapi.co/harmonica, which is both what keeps
+// the panel from silently losing already-known IPs on refresh and what
+// keeps it from re-tripping those services' rate limits every time. A
+// failed/"Unknown" lookup is deliberately NOT cached, so the next
+// refresh gets to retry it rather than being stuck with "Unknown"
+// forever. Unlike a KV-backed cache, this expires on its own - so an IP
+// that was only ever seen because a user typed in a wrong/malicious
+// ProxyIP domain ages back out instead of leaving bad data around
+// indefinitely for whoever looks that IP up next.
+async function getIpMeta(ctx, ip) {
   const cacheKey = `ipmeta:${ip}`;
-  const cached = await kvGetJson(kv, cacheKey);
+  const cached = await cacheGetJson(cacheKey);
   if (cached) return cached;
   const [geo, riskInfo] = await Promise.all([geolocateIp(ip), fetchIpRisk(ip)]);
   const meta = { ...geo, ...riskInfo };
-  if (meta.country && meta.country !== "Unknown") await kvPutJson(kv, cacheKey, meta);
+  if (meta.country && meta.country !== "Unknown") await cachePutJson(ctx, cacheKey, meta);
   return meta;
 }
 
@@ -322,21 +325,20 @@ async function getIpMeta(env, ip) {
 // already-cached IP's stored data wins over whatever this particular
 // response says, so a domain's IPs stay stable across refreshes even if
 // the upstream pool API's answer for one of them jitters or degrades.
-async function enrichWithPersistentCache(env, entries) {
-  const kv = env?.PROXY_GEO_KV;
+async function enrichWithPersistentCache(ctx, entries) {
   return Promise.all(
     entries.map(async (entry) => {
       const cacheKey = `ipmeta:${entry.ip}`;
-      const cached = await kvGetJson(kv, cacheKey);
+      const cached = await cacheGetJson(cacheKey);
       if (cached) return { ...entry, ...cached };
-      if (entry.country && entry.country !== "Unknown") await kvPutJson(kv, cacheKey, entry);
+      if (entry.country && entry.country !== "Unknown") await cachePutJson(ctx, cacheKey, entry);
       return entry;
     }),
   );
 }
 
 // Resolves one ProxyIP pool host into its enriched entries. A literal IP
-// host is just itself (single geolocate + risk lookup, KV-cached). A
+// host is just itself (single geolocate + risk lookup, cached). A
 // domain host goes through fetchDomainIpPool, which mirrors the domain's
 // whole current IP set - with risk + geo already attached - in one call;
 // if that service is down we fall back to a single DoH A-record lookup
@@ -344,12 +346,12 @@ async function enrichWithPersistentCache(env, entries) {
 // Note this always re-resolves which IPs currently back the host (so an
 // IP removed from the domain naturally stops appearing); only the
 // per-IP geo/risk metadata is cached, via getIpMeta/enrichWithPersistentCache.
-async function resolveProxyPoolHost(host, port, env) {
+async function resolveProxyPoolHost(host, port, ctx) {
   const isIPHost = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
 
   if (isIPHost) {
     if (isInIgnoredRange(host)) return [];
-    const meta = await getIpMeta(env, host);
+    const meta = await getIpMeta(ctx, host);
     return [{ host, port, ip: host, hostType: "ip", ...meta }];
   }
 
@@ -357,13 +359,13 @@ async function resolveProxyPoolHost(host, port, env) {
   if (!pool.length) {
     const single = await resolveIPv4ViaDoH(host);
     if (single) {
-      const meta = await getIpMeta(env, single);
+      const meta = await getIpMeta(ctx, single);
       pool = [{ ip: single, ...meta }];
     }
   }
 
   pool = pool.filter((p) => p.ip && !isInIgnoredRange(p.ip));
-  pool = await enrichWithPersistentCache(env, pool);
+  pool = await enrichWithPersistentCache(ctx, pool);
 
   return pool.map((p) => ({
     host,
@@ -385,8 +387,8 @@ async function resolveProxyPoolHost(host, port, env) {
 // both the panel card and the subscription builder share one lookup -
 // unless forceRefresh is set (the panel's Refresh button), which skips
 // straight to re-resolving every host's CURRENT IP set while still
-// reusing already-known per-IP geo/risk data via the KV cache above.
-async function buildProxyIpPool(cfg, ctx, env, forceRefresh = false) {
+// reusing already-known per-IP geo/risk data via the Cache API above.
+async function buildProxyIpPool(cfg, ctx, forceRefresh = false) {
   const cache = caches.default;
   const poolCacheKey = new Request("https://cf-proxyip-pool-cache.local");
   if (ctx && !forceRefresh) {
@@ -406,7 +408,7 @@ async function buildProxyIpPool(cfg, ctx, env, forceRefresh = false) {
       return true;
     });
 
-  const results = (await Promise.all(hosts.map(({ host, port }) => resolveProxyPoolHost(host, port, env)))).flat();
+  const results = (await Promise.all(hosts.map(({ host, port }) => resolveProxyPoolHost(host, port, ctx)))).flat();
 
   if (ctx && results.length) {
     const cacheResponse = new Response(JSON.stringify(results), {
@@ -493,7 +495,7 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
     // caches below and re-resolve every pool host's CURRENT IP set (so an
     // IP a domain no longer resolves to drops off, and a newly-added one
     // shows up) - see buildProxyIpPool. Already-known IPs still don't
-    // re-hit ipapi.co/harmonica though: that's what the KV-backed
+    // re-hit ipapi.co/harmonica though: that's what the
     // getIpMeta/enrichWithPersistentCache cache in buildProxyIpPool is for.
     const forceRefresh = url.searchParams.get("refresh") === "1";
 
@@ -504,7 +506,7 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
       if (cached) return cached;
     }
 
-    const enriched = await buildProxyIpPool(cfg, ctx, env, forceRefresh);
+    const enriched = await buildProxyIpPool(cfg, ctx, forceRefresh);
 
     const countryMap = new Map();
     enriched.forEach((entry) => {
