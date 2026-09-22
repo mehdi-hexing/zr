@@ -14,26 +14,3 @@ fallthrough = false
 type = "Text"
 globs = ["**/*.b64"]
 fallthrough = true
-
-# Resolved ProxyIP country/risk lookups are cached via the Workers edge
-# Cache API (see cacheGetJson/cachePutJson in src/core.js), not a KV
-# namespace - deliberately, so a user pointing ProxyIPs at a wrong or
-# malicious domain can't leave that domain's (mis)cached IP data sitting
-# around forever. No binding needed here.
-
-# Whenever you need to monitor real-time Log's,
-# uncomment these three sections.
-#[observability]
-#enabled = true
-#head_sampling_rate = 1
-
-#[observability.logs]
-#enabled = true
-#head_sampling_rate = 1
-#invocation_logs = true
-#persist = true
-
-#[observability.traces]
-#enabled = true
-#head_sampling_rate = 1
-#persist = true

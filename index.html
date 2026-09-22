@@ -2031,10 +2031,6 @@
       }
       async function fetchProxyHostInfo(host) {
         try {
-          // Server-side lookup (DNS resolve + geolocation, both run from
-          // the worker, not the visitor's browser) - see handleProxyHostInfo
-          // in src/routes.js. Response shape matches what
-          // updateIpApiIoDisplay() already expects.
           const response = await fetch(`/proxy-host-info?host=${encodeURIComponent(host)}`);
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           return await response.json();
@@ -2134,19 +2130,12 @@
         return `vless://${userID}@${newHost}:${newPort}${queryString}#${encodeURIComponent(newName)}`;
       }
 
-      // Matches the worker's own makeName(tag, proto) convention
-      // (src/core.js: `${tag}-${proto.toUpperCase()}`) instead of a
-      // one-off naming scheme, so client-generated configs look and sort
-      // consistently with everything the worker itself names.
       function makeClientConfigName(baseLink, tag) {
         const securityMatch = baseLink.match(/[?&]security=([^&#]+)/);
         const proto = securityMatch && securityMatch[1] !== "none" ? "tls" : "tcp";
         return `${tag}-${proto.toUpperCase()}`;
       }
 
-      // Sets/overwrites a key (e.g. nat64=on/off) inside the ws path query
-      // that's embedded in a VLESS link's own `path` param, mirroring the
-      // worker's withConfigOverrides()/parsePathOverrides() on the backend.
       function withPathOverride(rawLink, overrides = {}) {
         const match = rawLink.match(/^(vless:\/\/[^?#]+)(\?[^#]*)?(#.*)?$/);
         if (!match) return rawLink;
@@ -2185,12 +2174,6 @@
         toggle.addEventListener("change", sync);
 
         copyBtn.addEventListener("click", () => {
-          // Server-precomputed full links (see {{CONFIG_NAT64_ON}}/{{CONFIG_NAT64_OFF}}
-          // in handleConfigPage), so the copied config is always correctly
-          // named "NAT64-TLS" and keeps every field (alpn included) exactly
-          // as buildLink() generated it, instead of patching just the ws
-          // path of the unrelated "xray-config" link and leaving its name
-          // and the rest of its params untouched.
           const link = toggle.checked ? copyBtn.dataset.nat64On : copyBtn.dataset.nat64Off;
           if (!link) return;
           copyToClipboard(copyBtn, link);
@@ -2205,10 +2188,6 @@
         return "badge-yes";
       }
 
-      // Country codes aren't emoji by themselves; this turns "us" into 🇺🇸
-      // via the regional-indicator trick, same as countryCodeToFlagEmoji()
-      // in src/core.js (duplicated here since index.html isn't part of the
-      // worker's own module bundle).
       function countryFlagEmoji(countryCode) {
         if (!countryCode || countryCode.length !== 2) return "";
         const points = [...countryCode.toUpperCase()].map((c) => 0x1f1e6 + (c.charCodeAt(0) - 65));
@@ -2216,32 +2195,13 @@
         return String.fromCodePoint(...points);
       }
 
-      // Every host - whether it's a single fixed IP or a domain that
-      // resolved to several IPs - gets the same card shape: the host on
-      // its own header line, and its IP(s) listed below as one or more
-      // toggleable options (defaulting to the lowest-risk one, since
-      // entries are already sorted ascending by risk server-side). That
-      // keeps countries with only one ProxyIP visually consistent with
-      // countries that have many, instead of the single-IP case getting
-      // a flattened one-line layout of its own.
-      //
-      // `counter` is a single mutable { n } shared across the whole
-      // currently-rendered country list (see renderProxyIpCountry) so
-      // every individual IP - across every host card - gets one running
-      // "#1, #2, ..." index, not an index that resets per host group.
       function renderProxyHostGroup(hostGroup, counter) {
         const div = document.createElement("div");
         div.className = "proxyip-item";
-        // Custom checkbox-style options instead of a native <select>: the
-        // browser's own dropdown can only show one plain-text line per IP
-        // and only lets you pick one. Here every IP is its own toggle card
-        // showing its risk score/label right on the card (so it's visible
-        // without opening anything), and more than one can be expanded at
-        // once since a client app might want several fallback IPs.
         const optionsHtml = hostGroup.entries
           .map((entry, i) => {
             const badgeClass = proxyRiskBadgeClass(entry.score);
-            const selected = i === 0; // lowest risk, since entries are pre-sorted ascending
+            const selected = i === 0;
             const xrayCfg = entry.configs.find((c) => c.label === "Xray");
             const sbCfg = entry.configs.find((c) => c.label === "Singbox");
             const configButtons = entry.configs
@@ -2292,17 +2252,9 @@
         list.innerHTML = "";
         const counter = { n: 0 };
         group.hosts.forEach((hostGroup) => list.appendChild(renderProxyHostGroup(hostGroup, counter)));
-        // Every render is a fresh set of checkboxes (all unchecked), so the
-        // bulk bar's count/buttons need resetting to match - otherwise a
-        // stale count could sit there pointing at elements that no longer
-        // exist after switching country or refreshing.
         updateProxyBulkBar();
       }
 
-      // Keeps the "N selected" label and the two bulk-copy buttons in sync
-      // with however many .proxyip-select checkboxes are currently ticked
-      // inside #proxyip-list. Called after every re-render and on every
-      // checkbox change.
       function updateProxyBulkBar() {
         const list = document.getElementById("proxyip-list");
         const countEl = document.getElementById("proxyip-bulk-count");
@@ -2314,10 +2266,6 @@
         if (sbBtn) sbBtn.disabled = checked === 0;
       }
 
-      // Joins every checked entry's config (by data-xray-link or
-      // data-sb-link) into one newline-separated block and copies it -
-      // the same "flat list of vless:// links" shape as an /xray or /sb
-      // subscription, just limited to whatever the user hand-picked.
       function copySelectedProxyConfigs(button, attr) {
         const list = document.getElementById("proxyip-list");
         if (!list) return;
@@ -2332,14 +2280,6 @@
       function renderProxyCountryButtons(groups, activeCountry, onSelect) {
         const bar = document.getElementById("proxyip-country-buttons");
         if (!bar) return;
-        // Server sorts `groups` itself "country - risk, ascending" (lowest
-        // overall-risk country first) - that order still drives which
-        // country is selected by default (see initialCountry above). Here,
-        // for display only, a separate copy is sorted shortest-name-first:
-        // packing short pills ("UAE"-length names) before long ones
-        // ("United Arab Emirates") wraps far more evenly, so a lone long
-        // label doesn't end up stranded on its own row pushing the card
-        // wider than the one next to it.
         const byNameLength = [...groups].sort((a, b) => a.country.length - b.country.length);
         bar.innerHTML = byNameLength
           .map((g) => {
@@ -2370,10 +2310,6 @@
         if (!card || !bar || !list) return;
         const url = card.getAttribute("data-url");
         if (!url) return;
-
-        // Delegated once: covers both the static rows and the dynamically
-        // re-rendered config buttons under a host's IP <select>, so a
-        // change to the selected IP never needs its own listener rewiring.
         list.addEventListener("click", (e) => {
           const btn = e.target.closest("[data-proxyip-link]");
           if (!btn) return;
@@ -2381,12 +2317,6 @@
           copyToClipboard(btn, link);
         });
 
-        // Same delegation approach for the per-row selection checkboxes -
-        // one listener covers every checkbox across every re-render. When
-        // the checkbox belongs to a domain group's IP option, it also
-        // drives that option's expand/collapse (the "selected" class) -
-        // one checkbox now does both jobs instead of two separate
-        // checkbox-shaped controls on the same row.
         list.addEventListener("change", (e) => {
           if (!e.target.classList.contains("proxyip-select")) return;
           const option = e.target.closest(".proxyip-ip-option");
@@ -2404,17 +2334,8 @@
           bar.innerHTML = "";
           const icon = refreshBtn?.querySelector(".refresh-icon");
           if (refreshBtn) refreshBtn.disabled = true;
-          // Same spin-while-loading treatment as the "Refresh IP
-          // information" button above this card (see the
-          // "refresh-ip-info" click handler) - both refresh buttons
-          // should look and behave the same way while their fetch is in
-          // flight.
           if (icon) icon.style.animation = "spin 1s linear infinite";
           try {
-            // ?refresh=1 bypasses the worker's own response caches so a
-            // click on Refresh actually re-checks each domain's current
-            // IP set (see handleProxyIpsInfo in src/routes.js) instead of
-            // just re-fetching the same cached JSON as the initial load.
             const fetchUrl = forceRefresh ? `${url}${url.includes("?") ? "&" : "?"}refresh=1` : url;
             const res = await fetch(fetchUrl);
             if (!res.ok) throw new Error("Request failed");
