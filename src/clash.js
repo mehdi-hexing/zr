@@ -4,9 +4,12 @@ import {
   generateRandomPath,
   buildMainDomains,
   buildSubscriptionHeaders,
+  withConfigOverrides,
+  pickRandomProxyPort,
   CONST,
   SENS,
 } from "./core.js";
+import { buildProxyIpPool, selectBalancedProxyEntries, proxyEntryTag } from "./routes.js";
 
 const GENERAL_TEMPLATE = `port: 7890
 socks-port: 7891
@@ -98,8 +101,8 @@ sniffer:
         - 2096
 `;
 
-function clashProxyBlock({ name, server, port, uuid, hostName, tls }) {
-  const path = generateRandomPath(18);
+function clashProxyBlock({ name, server, port, uuid, hostName, tls, overrides }) {
+  const path = withConfigOverrides(generateRandomPath(18), overrides);
   const lines = [
     `  - name: ${name}`,
     `    type: ${SENS.vless()}`,
@@ -124,7 +127,8 @@ function clashProxyBlock({ name, server, port, uuid, hostName, tls }) {
   return lines.join("\n");
 }
 
-export async function handleClashConfig(request, userID, hostName, ctx) {
+export async function handleClashConfig(request, cfg, hostName, ctx) {
+  const userID = cfg.userID;
   const url = new URL(request.url);
   const subName = url.searchParams.get("name");
   const httpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
@@ -191,6 +195,30 @@ export async function handleClashConfig(request, userID, hostName, ctx) {
     }
   } catch (e) {
     console.error("Clash IP fetch failed", e);
+  }
+
+  try {
+    const pool = await buildProxyIpPool(cfg, ctx);
+    const selected = selectBalancedProxyEntries(pool);
+
+    selected.forEach((entry, i) => {
+      const tag = proxyEntryTag(entry, i);
+      const { proto, port } = pickRandomProxyPort(isPagesDeployment);
+      proxies.push(
+        clashProxyBlock({
+          name: tag,
+          server: hostName,
+          port,
+          uuid: userID,
+          hostName,
+          tls: proto === "tls",
+          overrides: { proxyIP: `${entry.ip}:${entry.port}` },
+        }),
+      );
+      names.push(tag);
+    });
+  } catch (e) {
+    console.error("ProxyIP pool for clash failed", e);
   }
 
   const groupList = names.map((n) => `      - ${n}`).join("\n");

@@ -120,31 +120,7 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
   if (cfg) {
     try {
       const pool = await buildProxyIpPool(cfg, ctx);
-      const sorted = [...pool].sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
-
-      const selected = [];
-      const seenCountries = new Set();
-      for (const entry of sorted) {
-        const countryKey = entry.country || "Unknown";
-        if (!seenCountries.has(countryKey)) {
-          seenCountries.add(countryKey);
-          selected.push(entry);
-        }
-      }
-
-      const MIN_TOTAL = 10;
-      if (selected.length < MIN_TOTAL) {
-        const selectedIds = new Set(selected.map((e) => `${e.host}:${e.ip}`));
-        for (const entry of sorted) {
-          if (selected.length >= MIN_TOTAL) break;
-          const id = `${entry.host}:${entry.ip}`;
-          if (!selectedIds.has(id)) {
-            selected.push(entry);
-            selectedIds.add(id);
-          }
-        }
-      }
-      selected.sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
+      const selected = selectBalancedProxyEntries(pool);
 
       selected.forEach((entry, i) => {
         const tag = proxyEntryTag(entry, i);
@@ -253,6 +229,7 @@ export async function handleProxyHostInfo(request, env, ctx) {
         city: meta.city || "",
         country_name: meta.country,
         country_code: meta.countryCode,
+        flag: meta.flag || "",
         org: meta.org || "",
       }),
       { headers },
@@ -265,7 +242,7 @@ export async function handleProxyHostInfo(request, env, ctx) {
 async function FetchIPData(ip) {
   try {
     const res = await safeFetch(
-      `https://api.harmonica.workers.dev/api/${ip}`,
+      `https://harmonica.serpents.workers.dev/${ip}`,
       {
         headers: {
           "User-Agent":
@@ -280,11 +257,12 @@ async function FetchIPData(ip) {
     if (!data) return null;
     const info = data.info || {};
     const details = data.details || {};
-    const threatScore = info.score ?? info.fraud_score ?? info.threatScore ?? 0;
+    const threatScore = info.fraud_score ?? info.score ?? info.threatScore ?? 0;
     const risk = info.risk ? info.risk.charAt(0).toUpperCase() + info.risk.slice(1) : "Unknown";
     return {
       country: details.country || "Unknown",
       countryCode: (details.country_code || "").toLowerCase(),
+      flag: details.flag || "",
       city: details.city || "",
       org: details.isp || details.organization || "",
       score: threatScore,
@@ -299,7 +277,15 @@ async function getIpMeta(ctx, ip) {
   const cacheKey = `ipmeta:${ip}`;
   const cached = await cacheGetJson(cacheKey);
   if (cached) return cached;
-  const meta = (await FetchIPData(ip)) || { country: "Unknown", countryCode: "", city: "", org: "", score: 0, risk: "Unknown" };
+  const meta = (await FetchIPData(ip)) || {
+    country: "Unknown",
+    countryCode: "",
+    flag: "",
+    city: "",
+    org: "",
+    score: 0,
+    risk: "Unknown",
+  };
   if (meta.country && meta.country !== "Unknown") await cachePutJson(ctx, cacheKey, meta);
   return meta;
 }
@@ -344,12 +330,41 @@ async function resolveProxyPoolHost(host, port, ctx) {
     hostType: "domain",
     country: p.country,
     countryCode: p.countryCode,
+    flag: p.flag,
     score: p.score,
     risk: p.risk,
   }));
 }
 
-async function buildProxyIpPool(cfg, ctx, forceRefresh = false) {
+export function selectBalancedProxyEntries(pool, minTotal = 10) {
+  const sorted = [...pool].sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
+
+  const selected = [];
+  const seenCountries = new Set();
+  for (const entry of sorted) {
+    const countryKey = entry.country || "Unknown";
+    if (!seenCountries.has(countryKey)) {
+      seenCountries.add(countryKey);
+      selected.push(entry);
+    }
+  }
+
+  if (selected.length < minTotal) {
+    const selectedIds = new Set(selected.map((e) => `${e.host}:${e.ip}`));
+    for (const entry of sorted) {
+      if (selected.length >= minTotal) break;
+      const id = `${entry.host}:${entry.ip}`;
+      if (!selectedIds.has(id)) {
+        selected.push(entry);
+        selectedIds.add(id);
+      }
+    }
+  }
+  selected.sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
+  return selected;
+}
+
+export async function buildProxyIpPool(cfg, ctx, forceRefresh = false) {
   const cache = caches.default;
   const poolCacheKey = new Request("https://cf-proxyip-pool-cache.local");
   if (ctx && !forceRefresh) {
@@ -381,9 +396,9 @@ async function buildProxyIpPool(cfg, ctx, forceRefresh = false) {
   return results;
 }
 
-function proxyEntryTag(entry, index) {
+export function proxyEntryTag(entry, index) {
   const countryTag = entry.countryCode ? entry.countryCode.toUpperCase() : (entry.country || "XX").slice(0, 2).toUpperCase();
-  const flag = countryCodeToFlagEmoji(entry.countryCode);
+  const flag = entry.flag || countryCodeToFlagEmoji(entry.countryCode);
   const hostTag = entry.hostType === "ip" ? "IP" : "Domain";
   return `${flag}${countryTag}-${hostTag}-${index + 1}`;
 }
@@ -401,6 +416,7 @@ function buildProxyEntryConfigs(entry, hostName, userID, index) {
     hostName,
     address: hostName,
     port: xrayPort.port,
+    enhanced: true,
     tag,
     overrides: { proxyIP },
   });
@@ -451,10 +467,16 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
     enriched.forEach((entry) => {
       const countryKey = entry.country || "Unknown";
       if (!countryMap.has(countryKey)) {
-        countryMap.set(countryKey, { country: countryKey, countryCode: entry.countryCode || "", hostsMap: new Map() });
+        countryMap.set(countryKey, {
+          country: countryKey,
+          countryCode: entry.countryCode || "",
+          flag: entry.flag || "",
+          hostsMap: new Map(),
+        });
       }
       const countryGroup = countryMap.get(countryKey);
       if (!countryGroup.countryCode && entry.countryCode) countryGroup.countryCode = entry.countryCode;
+      if (!countryGroup.flag && entry.flag) countryGroup.flag = entry.flag;
       const hostKey = entry.host;
       if (!countryGroup.hostsMap.has(hostKey)) {
         countryGroup.hostsMap.set(hostKey, { host: hostKey, hostType: entry.hostType, entries: [] });
@@ -479,7 +501,7 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
         return {
           country: countryGroup.country,
           countryCode: countryGroup.countryCode,
-          flag: countryCodeToFlagEmoji(countryGroup.countryCode),
+          flag: countryGroup.flag || countryCodeToFlagEmoji(countryGroup.countryCode),
           lowestScore: lowestEntry?.score ?? null,
           lowestRisk: lowestEntry?.risk ?? "Unknown",
           hosts,

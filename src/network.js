@@ -68,7 +68,7 @@ export async function ProtocolOverWSHandler(request, config) {
     .pipeTo(
       new WritableStream({
         async write(chunk, controller) {
-          if (udpStreamWriter) return udpStreamWriter.write(chunk);
+          if (udpStreamWriter) return udpStreamWriter(chunk);
           if (remoteSocketWapper.value) {
             const writer = remoteSocketWapper.value.writable.getWriter();
             await writer.write(chunk);
@@ -105,7 +105,10 @@ export async function ProtocolOverWSHandler(request, config) {
             vlessResponseHeader,
             log,
             config,
-          );
+          ).catch((err) => {
+            log(`HandleTCPOutBound failed: ${err}`);
+            safeCloseWebSocket(webSocket);
+          });
         },
         close() {
           log(`readableWebSocketStream closed`);
@@ -137,8 +140,11 @@ async function HandleTCPOutBound(
     remoteSocket.value = tcpSocket;
     log(`connected to ${address}:${port}`);
     const writer = tcpSocket.writable.getWriter();
-    await writer.write(rawClientData);
-    writer.releaseLock();
+    try {
+      await writer.write(rawClientData);
+    } finally {
+      writer.releaseLock();
+    }
     return tcpSocket;
   }
 
@@ -148,7 +154,14 @@ async function HandleTCPOutBound(
       return;
     }
     const [proxyHost, proxyPort = "443"] = pool[index].split(":");
-    const tcpSocket = await connectAndWrite(proxyHost, proxyPort);
+    let tcpSocket;
+    try {
+      tcpSocket = await connectAndWrite(proxyHost, proxyPort);
+    } catch (err) {
+      log(`ProxyIP ${proxyHost}:${proxyPort} connect failed: ${err}`);
+      await retryWithPool(pool, index + 1);
+      return;
+    }
     tcpSocket.closed
       .catch((error) => console.log("proxy tcpSocket closed error", error))
       .finally(() => safeCloseWebSocket(webSocket));
@@ -174,21 +187,31 @@ async function HandleTCPOutBound(
       return;
     }
     log(`falling back to NAT64: ${nat64Address}`);
-    const tcpSocket = await connectAndWrite(nat64Address, portRemote);
-    tcpSocket.closed
-      .catch((error) => console.log("NAT64 tcpSocket closed error", error))
-      .finally(() => safeCloseWebSocket(webSocket));
-    RemoteSocketToWS(tcpSocket, webSocket, protocolResponseHeader, null, log);
+    try {
+      const tcpSocket = await connectAndWrite(nat64Address, portRemote);
+      tcpSocket.closed
+        .catch((error) => console.log("NAT64 tcpSocket closed error", error))
+        .finally(() => safeCloseWebSocket(webSocket));
+      RemoteSocketToWS(tcpSocket, webSocket, protocolResponseHeader, null, log);
+    } catch (err) {
+      log(`NAT64 connect failed: ${err}`);
+      safeCloseWebSocket(webSocket);
+    }
   }
 
-  const tcpSocket = await connectAndWrite(addressRemote, portRemote);
-  RemoteSocketToWS(
-    tcpSocket,
-    webSocket,
-    protocolResponseHeader,
-    () => retryWithPool(config.proxyPool || [], 0),
-    log,
-  );
+  try {
+    const tcpSocket = await connectAndWrite(addressRemote, portRemote);
+    RemoteSocketToWS(
+      tcpSocket,
+      webSocket,
+      protocolResponseHeader,
+      () => retryWithPool(config.proxyPool || [], 0),
+      log,
+    );
+  } catch (err) {
+    log(`Initial connect to ${addressRemote}:${portRemote} failed: ${err}`);
+    await retryWithPool(config.proxyPool || [], 0);
+  }
 }
 
 function MakeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {

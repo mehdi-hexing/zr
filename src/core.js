@@ -1,13 +1,13 @@
 const decodeSecure = (encoded) => atob(encoded);
 
 export const SENS = {
-  vless:   () => decodeSecure("dmxlc3M="),
-  ws:      () => decodeSecure("d3M="),
-  wsOpts:  () => decodeSecure("d3Mtb3B0czo="),
-  edLine:  () => decodeSecure("ZWFybHktZGF0YS1oZWFkZXItbmFtZTog"),
+  vless: () => decodeSecure("dmxlc3M="),
+  ws: () => decodeSecure("d3M="),
+  wsOpts: () => decodeSecure("d3Mtb3B0czo="),
+  edLine: () => decodeSecure("ZWFybHktZGF0YS1oZWFkZXItbmFtZTog"),
   hiddify: () => decodeSecure("aGlkZGlmZTovL2luc3RhbGwtY29uZmlnP3VybD0="),
   v2rayng: () => decodeSecure("djJyYXluZzovL2luc3RhbGwtY29uZmlnP3VybD0="),
-  clash:   () => decodeSecure("Y2xhc2g6Ly9pbnN0YWxsLWNvbmZpZz91cmw9"),
+  clash: () => decodeSecure("Y2xhc2g6Ly9pbnN0YWxsLWNvbmZpZz91cmw9"),
   exclave: () => decodeSecure("c246Ly9zdWJzY3JpcHRpb24/dXJsPQ=="),
 };
 
@@ -172,7 +172,10 @@ export const CF_NON_TLS_PORTS = [80, 8080, 2052, 2082, 2086, 2095, 8880];
 export function pickRandomProxyPort(isPagesDeployment) {
   const pool = isPagesDeployment
     ? CF_TLS_PORTS.map((port) => ({ port, proto: "tls" }))
-    : [...CF_TLS_PORTS.map((port) => ({ port, proto: "tls" })), ...CF_NON_TLS_PORTS.map((port) => ({ port, proto: "tcp" }))];
+    : [
+    ...CF_TLS_PORTS.map((port) => ({ port, proto: "tls" })),
+    ...CF_NON_TLS_PORTS.map((port) => ({ port, proto: "tcp" })),
+    ];
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -186,7 +189,9 @@ export function countryCodeToFlagEmoji(countryCode) {
 
 export async function cacheGetJson(key) {
   try {
-    const res = await caches.default.match(new Request(`https://cf-ipmeta-cache.local/${encodeURIComponent(key)}`));
+    const res = await caches.default.match(
+      new Request(`https://cf-ipmeta-cache.local/${encodeURIComponent(key)}`),
+    );
     if (!res) return null;
     return await res.json();
   } catch (e) {
@@ -197,13 +202,18 @@ export async function cacheGetJson(key) {
 export async function cachePutJson(ctx, key, value, maxAgeSeconds = 21600) {
   try {
     const res = new Response(JSON.stringify(value), {
-      headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${maxAgeSeconds}` },
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": `public, max-age=${maxAgeSeconds}`,
+      },
     });
-    const put = caches.default.put(new Request(`https://cf-ipmeta-cache.local/${encodeURIComponent(key)}`), res);
+    const put = caches.default.put(
+      new Request(`https://cf-ipmeta-cache.local/${encodeURIComponent(key)}`),
+      res,
+    );
     if (ctx?.waitUntil) ctx.waitUntil(put);
     else await put;
-  } catch (e) {
-  }
+  } catch (e) {}
 }
 
 export function makeName(tag, proto) {
@@ -228,7 +238,7 @@ export function createVlessLink({
   if (security) params.set("security", security);
   if (sni) params.set("sni", sni);
   if (fp) params.set("fp", fp);
-  if (alpn) params.set("alpn", alpn);
+  params.set("alpn", alpn || "http/1.1");
   if (enhanced) {
     if (security === "tls") params.set("cs", CONST.CIPHER_SUITES);
     params.set("fm", CONST.FINAL_MASK);
