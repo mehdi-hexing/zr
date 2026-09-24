@@ -14,6 +14,7 @@ import {
   cacheGetJson,
   cachePutJson,
   pickRandomProxyPort,
+  pickRandomProxyAddress,
 } from "./core.js";
 import panelB64 from "./panel.b64";
 const panelBytes = Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0));
@@ -109,7 +110,7 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
       proto: "tls",
       userID,
       hostName,
-      address: hostName,
+      address: await pickRandomProxyAddress(hostName, ctx),
       port: 443,
       tag: "NAT64",
       enhanced,
@@ -122,12 +123,14 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
       const pool = await buildProxyIpPool(cfg, ctx);
       const selected = selectBalancedProxyEntries(pool);
 
-      selected.forEach((entry, i) => {
+      for (let i = 0; i < selected.length; i++) {
+        const entry = selected[i];
         const tag = proxyEntryTag(entry, i);
         const overrides = { proxyIP: `${entry.ip}:${entry.port}` };
         const { proto, port } = pickRandomProxyPort(isPagesDeployment);
-        links.push(buildLink({ core, proto, userID, hostName, address: hostName, port, tag, enhanced, overrides }));
-      });
+        const address = await pickRandomProxyAddress(hostName, ctx);
+        links.push(buildLink({ core, proto, userID, hostName, address, port, tag, enhanced, overrides }));
+      }
     } catch (e) {
       console.error("ProxyIP pool for subscription failed", e);
     }
@@ -403,18 +406,20 @@ export function proxyEntryTag(entry, index) {
   return `${flag}${countryTag}-${hostTag}-${index + 1}`;
 }
 
-function buildProxyEntryConfigs(entry, hostName, userID, index) {
+async function buildProxyEntryConfigs(entry, hostName, userID, index, ctx) {
   const tag = proxyEntryTag(entry, index);
   const proxyIP = `${entry.ip}:${entry.port}`;
   const isPagesDeployment = hostName.endsWith(".pages.dev");
   const xrayPort = pickRandomProxyPort(isPagesDeployment);
   const sbPort = pickRandomProxyPort(isPagesDeployment);
+  const xrayAddress = await pickRandomProxyAddress(hostName, ctx);
+  const sbAddress = await pickRandomProxyAddress(hostName, ctx);
   const xray = buildLink({
     core: "xray",
     proto: xrayPort.proto,
     userID,
     hostName,
-    address: hostName,
+    address: xrayAddress,
     port: xrayPort.port,
     enhanced: true,
     tag,
@@ -425,7 +430,7 @@ function buildProxyEntryConfigs(entry, hostName, userID, index) {
     proto: sbPort.proto,
     userID,
     hostName,
-    address: hostName,
+    address: sbAddress,
     port: sbPort.port,
     tag,
     overrides: { proxyIP },
@@ -484,18 +489,22 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
       countryGroup.hostsMap.get(hostKey).entries.push(entry);
     });
 
-    const groups = [...countryMap.values()]
-      .map((countryGroup) => {
-        const hosts = [...countryGroup.hostsMap.values()]
-          .map((hostGroup) => {
+    const groups = await Promise.all(
+      [...countryMap.values()].map(async (countryGroup) => {
+        const hosts = await Promise.all(
+          [...countryGroup.hostsMap.values()].map(async (hostGroup) => {
             const sortedEntries = [...hostGroup.entries].sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
+            const entries = await Promise.all(
+              sortedEntries.map((entry, i) => buildProxyEntryConfigs(entry, hostName, cfg.userID, i, ctx)),
+            );
             return {
               host: hostGroup.host,
               hostType: hostGroup.hostType,
-              entries: sortedEntries.map((entry, i) => buildProxyEntryConfigs(entry, hostName, cfg.userID, i)),
+              entries,
             };
-          })
-          .sort((a, b) => (a.entries[0]?.score ?? 999) - (b.entries[0]?.score ?? 999));
+          }),
+        );
+        hosts.sort((a, b) => (a.entries[0]?.score ?? 999) - (b.entries[0]?.score ?? 999));
 
         const lowestEntry = hosts[0]?.entries[0];
         return {
@@ -506,8 +515,9 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
           lowestRisk: lowestEntry?.risk ?? "Unknown",
           hosts,
         };
-      })
-      .sort((a, b) => (a.lowestScore ?? 999) - (b.lowestScore ?? 999));
+      }),
+    );
+    groups.sort((a, b) => (a.lowestScore ?? 999) - (b.lowestScore ?? 999));
 
     const response = new Response(JSON.stringify({ groups }), { headers });
     if (groups.length) ctx.waitUntil(cache.put(cacheKey, response.clone()));
@@ -517,7 +527,7 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
   }
 }
 
-export async function handleConfigPage(userID, hostName, proxyAddress, workerName, nat64 = true) {
+export async function handleConfigPage(userID, hostName, proxyAddress, workerName, nat64 = true, ctx = null) {
   const dream = buildLink({
     core: "xray",
     proto: "tls",
@@ -548,12 +558,13 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
     enhanced: true,
   });
 
+  const nat64Address = await pickRandomProxyAddress(hostName, ctx);
   const nat64On = buildLink({
     core: "xray",
     proto: "tls",
     userID,
     hostName,
-    address: hostName,
+    address: nat64Address,
     port: 443,
     tag: "NAT64",
     overrides: { nat64: true },
@@ -563,7 +574,7 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
     proto: "tls",
     userID,
     hostName,
-    address: hostName,
+    address: nat64Address,
     port: 443,
     tag: "NAT64",
     overrides: { nat64: false },

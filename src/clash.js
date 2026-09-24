@@ -6,6 +6,7 @@ import {
   buildSubscriptionHeaders,
   withConfigOverrides,
   pickRandomProxyPort,
+  pickRandomProxyAddress,
   CONST,
   SENS,
 } from "./core.js";
@@ -201,13 +202,15 @@ export async function handleClashConfig(request, cfg, hostName, ctx) {
     const pool = await buildProxyIpPool(cfg, ctx);
     const selected = selectBalancedProxyEntries(pool);
 
-    selected.forEach((entry, i) => {
+    for (let i = 0; i < selected.length; i++) {
+      const entry = selected[i];
       const tag = proxyEntryTag(entry, i);
       const { proto, port } = pickRandomProxyPort(isPagesDeployment);
+      const server = await pickRandomProxyAddress(hostName, ctx);
       proxies.push(
         clashProxyBlock({
           name: tag,
-          server: hostName,
+          server,
           port,
           uuid: userID,
           hostName,
@@ -216,7 +219,7 @@ export async function handleClashConfig(request, cfg, hostName, ctx) {
         }),
       );
       names.push(tag);
-    });
+    }
   } catch (e) {
     console.error("ProxyIP pool for clash failed", e);
   }

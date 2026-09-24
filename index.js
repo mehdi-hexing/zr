@@ -122,6 +122,7 @@ export default {
         cfg.proxyAddress,
         cfg.workerName,
         cfg.nat64,
+        ctx,
         );
 
       return new Response(notFoundPage(url.hostname, cfg.workerName), {

@@ -179,6 +179,45 @@ export function pickRandomProxyPort(isPagesDeployment) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+export async function getCloudflareIpPool(ctx) {
+  try {
+    const cache = caches.default;
+    const cacheKey = new Request("https://cf-ip-cache.local");
+    let response = await cache.match(cacheKey);
+    if (!response) {
+      const r = await safeFetch(
+        "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/Cloudflare-IPs.json",
+        {},
+        4000,
+      );
+      if (r.ok) {
+        response = new Response(await r.text(), {
+          headers: { "Cache-Control": "public, max-age=86400" },
+        });
+        if (ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, response.clone()));
+      }
+    }
+    if (!response) return [];
+    const json = await response.json();
+    return [...(json.ipv4 || []), ...(json.ipv6 || [])].map((x) => x.ip).filter((ip) => !isInIgnoredRange(ip));
+  } catch (e) {
+    return [];
+  }
+}
+
+export async function pickRandomProxyAddress(hostName, ctx) {
+  const domains = buildMainDomains(hostName);
+  const useIP = Math.random() < 0.5;
+  if (useIP) {
+    const ips = await getCloudflareIpPool(ctx);
+    if (ips.length) {
+      const ip = pick(ips);
+      return ip.includes(":") ? `[${ip}]` : ip;
+    }
+  }
+  return pick(domains);
+}
+
 export function countryCodeToFlagEmoji(countryCode) {
   if (!countryCode || countryCode.length !== 2) return "";
   const code = countryCode.toUpperCase();
