@@ -152,14 +152,12 @@ export const CORE_PRESETS = {
     tls: {
       path: () => generateRandomPath(18),
       security: "tls",
-      fp: "chrome",
       alpn: "http/1.1",
       extra: CONST.ED_PARAMS,
     },
     tcp: {
       path: () => generateRandomPath(18),
       security: "none",
-      fp: "chrome",
       alpn: "http/1.1",
       extra: CONST.ED_PARAMS,
     },
@@ -274,6 +272,7 @@ export function createVlessLink({
   name,
 }) {
   const params = new URLSearchParams({ type: decodeSecure("d3M="), host, path });
+  params.set("encryption", "none");
   if (security) params.set("security", security);
   if (sni) params.set("sni", sni);
   if (fp) params.set("fp", fp);
