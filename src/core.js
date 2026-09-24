@@ -203,15 +203,12 @@ export async function getCloudflareIpPool(ctx) {
   }
 }
 
-export async function pickRandomProxyAddress(hostName, ctx) {
+export function pickRandomProxyAddress(hostName, ips = []) {
   const domains = buildMainDomains(hostName);
-  const useIP = Math.random() < 0.5;
+  const useIP = ips.length > 0 && Math.random() < 0.5;
   if (useIP) {
-    const ips = await getCloudflareIpPool(ctx);
-    if (ips.length) {
-      const ip = pick(ips);
-      return ip.includes(":") ? `[${ip}]` : ip;
-    }
+    const ip = pick(ips);
+    return ip.includes(":") ? `[${ip}]` : ip;
   }
   return pick(domains);
 }
@@ -274,9 +271,11 @@ export function createVlessLink({
   const params = new URLSearchParams({ type: decodeSecure("d3M="), host, path });
   params.set("encryption", "none");
   if (security) params.set("security", security);
-  if (sni) params.set("sni", sni);
-  if (fp) params.set("fp", fp);
-  params.set("alpn", alpn || "http/1.1");
+  if (security === "tls") {
+    if (sni) params.set("sni", sni);
+    if (fp) params.set("fp", fp);
+    params.set("alpn", alpn || "http/1.1");
+  }
   if (enhanced) {
     if (security === "tls") params.set("cs", CONST.CIPHER_SUITES);
     params.set("fm", CONST.FINAL_MASK);

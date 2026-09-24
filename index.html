@@ -2312,6 +2312,36 @@
           });
       }
 
+      function showCopyToast(lines) {
+        const toast = document.createElement("div");
+        toast.style.cssText =
+          "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:5px;z-index:9999;text-align:center;line-height:1.5;max-width:90vw;";
+        toast.innerHTML = lines
+          .map((line, i) =>
+            i === 0
+              ? `<div>${line}</div>`
+              : `<div style="font-size:12px;opacity:0.85;margin-top:4px;">${line}</div>`,
+          )
+          .join("");
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 2000);
+      }
+
+      function configCopiedToastLines(count) {
+        const word = count === 1 ? "Config" : "Configs";
+        return [`${word} Copied To Clipboard`];
+      }
+
+      function pattngCopyToastLine(count) {
+        const demonstrative = count === 1 ? "this" : "these";
+        const word = count === 1 ? "config" : "configs";
+        return `Copy ${demonstrative} ${word} To PattNG Client`;
+      }
+
+      function flashFeedback(el, success) {
+        showCopyToast([success ? "Subscription URL copied!" : "Failed to copy link"]);
+      }
+
       function updateIpApiIoDisplay(geo, prefix, originalHost) {
         const hostElement = document.getElementById(`${prefix}-host`);
         if (hostElement) hostElement.textContent = originalHost || "N/A";
@@ -2504,6 +2534,7 @@
           const link = toggle.checked ? copyBtn.dataset.nat64On : copyBtn.dataset.nat64Off;
           if (!link) return;
           copyToClipboard(copyBtn, link);
+          showCopyToast(configCopiedToastLines(1));
         });
       }
 
@@ -2597,7 +2628,7 @@
         if (sbBtn) sbBtn.disabled = checked === 0;
       }
 
-      function copySelectedProxyConfigs(button, attr) {
+      function copySelectedProxyConfigs(button, attr, opts = {}) {
         const list = document.getElementById("proxyip-list");
         if (!list) return;
         const links = [...list.querySelectorAll(".proxyip-select:checked")]
@@ -2606,6 +2637,9 @@
           .map((encoded) => decodeURIComponent(encoded));
         if (!links.length) return;
         copyToClipboard(button, links.join("\n"));
+        const lines = configCopiedToastLines(links.length);
+        if (opts.showPattng) lines.push(pattngCopyToastLine(links.length));
+        showCopyToast(lines);
       }
 
       function renderProxyCountryButtons(groups, activeCountry, onSelect) {
@@ -2650,6 +2684,7 @@
           if (!btn) return;
           const link = decodeURIComponent(btn.getAttribute("data-proxyip-link"));
           copyToClipboard(btn, link);
+          showCopyToast(configCopiedToastLines(1));
         });
         list.addEventListener("change", (e) => {
           if (!e.target.classList.contains("proxyip-select")) return;
@@ -2660,7 +2695,7 @@
         const bulkCopyXrayBtn = document.getElementById("proxyip-bulk-copy-xray");
         const bulkCopySbBtn = document.getElementById("proxyip-bulk-copy-sb");
         bulkCopyXrayBtn?.addEventListener("click", () =>
-          copySelectedProxyConfigs(bulkCopyXrayBtn, "data-xray-link"),
+          copySelectedProxyConfigs(bulkCopyXrayBtn, "data-xray-link", { showPattng: true }),
         );
         bulkCopySbBtn?.addEventListener("click", () =>
           copySelectedProxyConfigs(bulkCopySbBtn, "data-sb-link"),
@@ -3389,14 +3424,7 @@
             onLongPress: () => {
               navigator.clipboard
                 .writeText(rawSubUrl)
-                .then(() => {
-                  const toast = document.createElement("div");
-                  toast.textContent = "Subscription URL copied!";
-                  toast.style.cssText =
-                    "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:5px;z-index:9999;";
-                  document.body.appendChild(toast);
-                  setTimeout(() => toast.remove(), 2000);
-                })
+                .then(() => showCopyToast(["Subscription URL copied!"]))
                 .catch((err) => console.error("Copy failed:", err));
             },
           });

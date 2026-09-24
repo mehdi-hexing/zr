@@ -15,6 +15,7 @@ import {
   cachePutJson,
   pickRandomProxyPort,
   pickRandomProxyAddress,
+  getCloudflareIpPool,
 } from "./core.js";
 import panelB64 from "./panel.b64";
 const panelBytes = Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0));
@@ -25,6 +26,7 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
   const subName = url.searchParams.get("name");
 
   const mainDomains = buildMainDomains(hostName);
+  const cfIpPool = await getCloudflareIpPool(ctx);
 
   const httpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
   const httpPorts = [80, 8080, 8880, 2052, 2082, 2086, 2095];
@@ -110,7 +112,7 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
       proto: "tls",
       userID,
       hostName,
-      address: await pickRandomProxyAddress(hostName, ctx),
+      address: pickRandomProxyAddress(hostName, cfIpPool),
       port: 443,
       tag: "NAT64",
       enhanced,
@@ -128,7 +130,7 @@ export async function handleIpSubscription(request, core, userID, hostName, ctx,
         const tag = proxyEntryTag(entry, i);
         const overrides = { proxyIP: `${entry.ip}:${entry.port}` };
         const { proto, port } = pickRandomProxyPort(isPagesDeployment);
-        const address = await pickRandomProxyAddress(hostName, ctx);
+        const address = pickRandomProxyAddress(hostName, cfIpPool);
         links.push(buildLink({ core, proto, userID, hostName, address, port, tag, enhanced, overrides }));
       }
     } catch (e) {
@@ -406,14 +408,14 @@ export function proxyEntryTag(entry, index) {
   return `${flag}${countryTag}-${hostTag}-${index + 1}`;
 }
 
-async function buildProxyEntryConfigs(entry, hostName, userID, index, ctx) {
+function buildProxyEntryConfigs(entry, hostName, userID, index, cfIpPool) {
   const tag = proxyEntryTag(entry, index);
   const proxyIP = `${entry.ip}:${entry.port}`;
   const isPagesDeployment = hostName.endsWith(".pages.dev");
   const xrayPort = pickRandomProxyPort(isPagesDeployment);
   const sbPort = pickRandomProxyPort(isPagesDeployment);
-  const xrayAddress = await pickRandomProxyAddress(hostName, ctx);
-  const sbAddress = await pickRandomProxyAddress(hostName, ctx);
+  const xrayAddress = pickRandomProxyAddress(hostName, cfIpPool);
+  const sbAddress = pickRandomProxyAddress(hostName, cfIpPool);
   const xray = buildLink({
     core: "xray",
     proto: xrayPort.proto,
@@ -452,21 +454,15 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
   const headers = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
-    "Cache-Control": "public, max-age=21600",
+    "Cache-Control": "no-store",
   };
 
   try {
     const url = new URL(request.url);
     const forceRefresh = url.searchParams.get("refresh") === "1";
 
-    const cache = caches.default;
-    const cacheKey = new Request(`https://cf-proxyips-cache.local/${hostName}`);
-    if (!forceRefresh) {
-      const cached = await cache.match(cacheKey);
-      if (cached) return cached;
-    }
-
     const enriched = await buildProxyIpPool(cfg, ctx, forceRefresh);
+    const cfIpPool = await getCloudflareIpPool(ctx);
 
     const countryMap = new Map();
     enriched.forEach((entry) => {
@@ -494,8 +490,8 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
         const hosts = await Promise.all(
           [...countryGroup.hostsMap.values()].map(async (hostGroup) => {
             const sortedEntries = [...hostGroup.entries].sort((a, b) => (a.score ?? 999) - (b.score ?? 999));
-            const entries = await Promise.all(
-              sortedEntries.map((entry, i) => buildProxyEntryConfigs(entry, hostName, cfg.userID, i, ctx)),
+            const entries = sortedEntries.map((entry, i) =>
+              buildProxyEntryConfigs(entry, hostName, cfg.userID, i, cfIpPool),
             );
             return {
               host: hostGroup.host,
@@ -519,9 +515,7 @@ export async function handleProxyIpsInfo(request, cfg, hostName, ctx, env) {
     );
     groups.sort((a, b) => (a.lowestScore ?? 999) - (b.lowestScore ?? 999));
 
-    const response = new Response(JSON.stringify({ groups }), { headers });
-    if (groups.length) ctx.waitUntil(cache.put(cacheKey, response.clone()));
-    return response;
+    return new Response(JSON.stringify({ groups }), { headers });
   } catch (e) {
     return new Response(JSON.stringify({ groups: [], error: e.toString() }), { headers });
   }
@@ -558,7 +552,8 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
     enhanced: true,
   });
 
-  const nat64Address = await pickRandomProxyAddress(hostName, ctx);
+  const cfIpPool = await getCloudflareIpPool(ctx);
+  const nat64Address = pickRandomProxyAddress(hostName, cfIpPool);
   const nat64On = buildLink({
     core: "xray",
     proto: "tls",

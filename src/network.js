@@ -45,84 +45,94 @@ function parsePathOverrides(url) {
 }
 
 export async function ProtocolOverWSHandler(request, config) {
-  const overrides = parsePathOverrides(new URL(request.url));
-  config = { ...config, ...overrides };
+  try {
+    const overrides = parsePathOverrides(new URL(request.url));
+    config = { ...config, ...overrides };
 
-  const webSocketPair = new WebSocketPair();
-  const [client, webSocket] = Object.values(webSocketPair);
-  webSocket.accept();
+    const webSocketPair = new WebSocketPair();
+    const [client, webSocket] = Object.values(webSocketPair);
+    webSocket.accept();
 
-  let address = "";
-  let portWithRandomLog = "";
-  let udpStreamWriter = null;
+    let address = "";
+    let portWithRandomLog = "";
+    let udpStreamWriter = null;
 
-  const log = (info, event) => {
-    console.log(`[${address}:${portWithRandomLog}] ${info}`, event || "");
-  };
+    const log = (info, event) => {
+      console.log(`[${address}:${portWithRandomLog}] ${info}`, event || "");
+    };
 
-  const earlyDataHeader = request.headers.get(CONST.ED_PARAMS.eh) || "";
-  const readableWebSocketStream = MakeReadableWebSocketStream(webSocket, earlyDataHeader, log);
-  let remoteSocketWapper = { value: null };
+    const earlyDataHeader = request.headers.get(CONST.ED_PARAMS.eh) || "";
+    const readableWebSocketStream = MakeReadableWebSocketStream(webSocket, earlyDataHeader, log);
+    let remoteSocketWapper = { value: null };
 
-  readableWebSocketStream
-    .pipeTo(
-      new WritableStream({
-        async write(chunk, controller) {
-          if (udpStreamWriter) return udpStreamWriter(chunk);
-          if (remoteSocketWapper.value) {
-            const writer = remoteSocketWapper.value.writable.getWriter();
-            await writer.write(chunk);
-            writer.releaseLock();
-            return;
-          }
-
-          const header = processHeader(new Uint8Array(chunk), config.userID);
-          if (header.has_error) throw new Error(header.message);
-
-          address = header.address_remote;
-          portWithRandomLog = `${header.port_remote}--${Math.random()} ${header.is_udp ? "udp" : "tcp"} `;
-          const vlessResponseHeader = new Uint8Array([header.version, 0]);
-          const rawClientData = chunk.slice(header.raw_data_index);
-
-          if (header.is_udp) {
-            if (header.port_remote === 53) {
-              const dnsPipeline = await createDnsPipeline(webSocket, vlessResponseHeader, log);
-              udpStreamWriter = dnsPipeline.write;
-              udpStreamWriter(rawClientData);
-            } else {
-              log(`udp:${header.port_remote} not supported (dns-only), closing gently`);
-              safeCloseWebSocket(webSocket);
+    readableWebSocketStream
+      .pipeTo(
+        new WritableStream({
+          async write(chunk, controller) {
+            if (udpStreamWriter) return udpStreamWriter(chunk);
+            if (remoteSocketWapper.value) {
+              const writer = remoteSocketWapper.value.writable.getWriter();
+              await writer.write(chunk);
+              writer.releaseLock();
+              return;
             }
-            return;
-          }
 
-          HandleTCPOutBound(
-            remoteSocketWapper,
-            header.address_remote,
-            header.port_remote,
-            rawClientData,
-            webSocket,
-            vlessResponseHeader,
-            log,
-            config,
-          ).catch((err) => {
-            log(`HandleTCPOutBound failed: ${err}`);
-            safeCloseWebSocket(webSocket);
-          });
-        },
-        close() {
-          log(`readableWebSocketStream closed`);
-        },
-        abort(err) {
-          log(`readableWebSocketStream aborted`, err);
-        },
-      }),
-    )
-    .catch((err) => {
-      console.error("Pipeline failed:", err.stack || err);
-    });
+            const header = processHeader(new Uint8Array(chunk), config.userID);
+            if (header.has_error) throw new Error(header.message);
 
-  return new Response(null, { status: 101, webSocket: client });
+            address = header.address_remote;
+            portWithRandomLog = `${header.port_remote}--${Math.random()} ${header.is_udp ? "udp" : "tcp"} `;
+            const vlessResponseHeader = new Uint8Array([header.version, 0]);
+            const rawClientData = chunk.slice(header.raw_data_index);
+
+            if (header.is_udp) {
+              if (header.port_remote === 53) {
+                const dnsPipeline = await createDnsPipeline(webSocket, vlessResponseHeader, log);
+                udpStreamWriter = dnsPipeline.write;
+                udpStreamWriter(rawClientData).catch((err) => {
+                  log(`DNS write failed: ${err}`);
+                  safeCloseWebSocket(webSocket);
+                });
+              } else {
+                log(`udp:${header.port_remote} not supported (dns-only), closing gently`);
+                safeCloseWebSocket(webSocket);
+              }
+              return;
+            }
+
+            HandleTCPOutBound(
+              remoteSocketWapper,
+              header.address_remote,
+              header.port_remote,
+              rawClientData,
+              webSocket,
+              vlessResponseHeader,
+              log,
+              config,
+            ).catch((err) => {
+              log(`HandleTCPOutBound failed: ${err}`);
+              safeCloseWebSocket(webSocket);
+            });
+          },
+          close() {
+            log(`readableWebSocketStream closed`);
+          },
+          abort(err) {
+            log(`readableWebSocketStream aborted`, err);
+          },
+        }),
+      )
+      .catch((err) => {
+        console.error("Pipeline failed:", err && err.stack ? err.stack : err);
+        safeCloseWebSocket(webSocket);
+      });
+
+    return new Response(null, { status: 101, webSocket: client });
+  } catch (err) {
+    console.error("ProtocolOverWSHandler setup failed:", err && err.stack ? err.stack : err);
+    const message = err && err.message ? err.message : String(err);
+    return new Response(`WebSocket setup error: ${message}`, { status: 500 });
+  }
 }
 
 async function HandleTCPOutBound(
@@ -171,7 +181,10 @@ async function HandleTCPOutBound(
       protocolResponseHeader,
       () => retryWithPool(pool, index + 1),
       log,
-    );
+    ).catch((err) => {
+      log(`RemoteSocketToWS (pool) failed: ${err}`);
+      safeCloseWebSocket(webSocket);
+    });
   }
 
   async function retryWithNAT64() {
@@ -192,7 +205,10 @@ async function HandleTCPOutBound(
       tcpSocket.closed
         .catch((error) => console.log("NAT64 tcpSocket closed error", error))
         .finally(() => safeCloseWebSocket(webSocket));
-      RemoteSocketToWS(tcpSocket, webSocket, protocolResponseHeader, null, log);
+      RemoteSocketToWS(tcpSocket, webSocket, protocolResponseHeader, null, log).catch((err) => {
+        log(`RemoteSocketToWS (nat64) failed: ${err}`);
+        safeCloseWebSocket(webSocket);
+      });
     } catch (err) {
       log(`NAT64 connect failed: ${err}`);
       safeCloseWebSocket(webSocket);
@@ -207,7 +223,10 @@ async function HandleTCPOutBound(
       protocolResponseHeader,
       () => retryWithPool(config.proxyPool || [], 0),
       log,
-    );
+    ).catch((err) => {
+      log(`RemoteSocketToWS (initial) failed: ${err}`);
+      safeCloseWebSocket(webSocket);
+    });
   } catch (err) {
     log(`Initial connect to ${addressRemote}:${portRemote} failed: ${err}`);
     await retryWithPool(config.proxyPool || [], 0);
@@ -270,13 +289,19 @@ async function RemoteSocketToWS(remoteSocket, webSocket, protocolResponseHeader,
       }),
     );
   } catch (error) {
-    console.error(`RemoteSocketToWS error:`, error.stack || error);
+    console.error(`RemoteSocketToWS error:`, error && error.stack ? error.stack : error);
     safeCloseWebSocket(webSocket);
+    return;
   }
 
   if (!hasIncomingData && retry) {
     log(`No incoming data, retrying`);
-    await retry();
+    try {
+      await retry();
+    } catch (error) {
+      log(`retry() failed: ${error}`);
+      safeCloseWebSocket(webSocket);
+    }
   }
 }
 

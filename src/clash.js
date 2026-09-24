@@ -7,6 +7,7 @@ import {
   withConfigOverrides,
   pickRandomProxyPort,
   pickRandomProxyAddress,
+  getCloudflareIpPool,
   CONST,
   SENS,
 } from "./core.js";
@@ -201,12 +202,13 @@ export async function handleClashConfig(request, cfg, hostName, ctx) {
   try {
     const pool = await buildProxyIpPool(cfg, ctx);
     const selected = selectBalancedProxyEntries(pool);
+    const cfIpPool = await getCloudflareIpPool(ctx);
 
     for (let i = 0; i < selected.length; i++) {
       const entry = selected[i];
       const tag = proxyEntryTag(entry, i);
       const { proto, port } = pickRandomProxyPort(isPagesDeployment);
-      const server = await pickRandomProxyAddress(hostName, ctx);
+      const server = pickRandomProxyAddress(hostName, cfIpPool);
       proxies.push(
         clashProxyBlock({
           name: tag,
