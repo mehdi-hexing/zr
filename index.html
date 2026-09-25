@@ -2076,7 +2076,7 @@
             </div>
           </div>
 
-          <button id="nat64-copy-btn" type="button" class="icon-btn nat64-copy-btn" aria-label="Copy config with this NAT64 setting" data-nat64-on="{{CONFIG_NAT64_ON}}" data-nat64-off="{{CONFIG_NAT64_OFF}}">
+          <button id="nat64-copy-btn" type="button" class="icon-btn nat64-copy-btn" aria-label="Copy config with this NAT64 setting" data-nat64-on-normal="{{CONFIG_NAT64_ON_NORMAL}}" data-nat64-on-enhanced="{{CONFIG_NAT64_ON_ENHANCED}}" data-nat64-off-normal="{{CONFIG_NAT64_OFF_NORMAL}}" data-nat64-off-enhanced="{{CONFIG_NAT64_OFF_ENHANCED}}">
             <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -2527,14 +2527,25 @@
           el.className = `badge ${on ? "badge-yes" : "badge-no"}`;
         };
         renderBadge(serverBadge, defaultOn);
-        const sync = () => renderBadge(configBadge, toggle.checked);
+        let activeConfigs = { normal: "", enhanced: "" };
+        const sync = () => {
+          renderBadge(configBadge, toggle.checked);
+          activeConfigs = toggle.checked
+            ? { normal: copyBtn.dataset.nat64OnNormal, enhanced: copyBtn.dataset.nat64OnEnhanced }
+            : { normal: copyBtn.dataset.nat64OffNormal, enhanced: copyBtn.dataset.nat64OffEnhanced };
+        };
         sync();
         toggle.addEventListener("change", sync);
         copyBtn.addEventListener("click", () => {
-          const link = toggle.checked ? copyBtn.dataset.nat64On : copyBtn.dataset.nat64Off;
-          if (!link) return;
-          copyToClipboard(copyBtn, link);
-          showCopyToast(configCopiedToastLines(1));
+          openXrayChoiceModal((enhanced) => {
+            const configs = enhanced ? activeConfigs.enhanced : activeConfigs.normal;
+            if (!configs) return;
+            copyToClipboard(copyBtn, configs);
+            const count = configs.split("\n").filter(Boolean).length;
+            const lines = configCopiedToastLines(count);
+            if (enhanced) lines.push(pattngCopyToastLine(count));
+            showCopyToast(lines);
+          }, `Select the config type you want to copy for this NAT64 setting (currently ${toggle.checked ? "On" : "Off"}) ${XRAY_CHOICE_MODAL_TEXT_PATTNG}`);
         });
       }
 
@@ -2564,8 +2575,18 @@
             const sbCfg = entry.configs.find((c) => c.label === "Singbox");
             const xrayNormalLink = entry.xrayNormalLink ?? "";
             const configButtons = entry.configs
-              .map(
-                (cfgItem) => `
+              .map((cfgItem) =>
+                cfgItem.label === "Xray"
+                  ? `
+                  <button type="button" class="icon-btn" data-proxyip-link-normal="${encodeURIComponent(xrayNormalLink)}" data-proxyip-link-enhanced="${encodeURIComponent(cfgItem.link)}" aria-label="Copy ${escapeHtml(cfgItem.label)} config for ${escapeHtml(entry.ip)}">
+                    <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                    <span>${escapeHtml(cfgItem.label)}</span>
+                  </button>
+                `
+                  : `
                   <button type="button" class="icon-btn" data-proxyip-link="${encodeURIComponent(cfgItem.link)}" aria-label="Copy ${escapeHtml(cfgItem.label)} config for ${escapeHtml(entry.ip)}">
                     <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -2631,22 +2652,29 @@
 
       let v2rayngChoiceHandler = null;
 
-      function openProxyIpXrayChoiceModal(bulkCopyXrayBtn) {
+      const XRAY_CHOICE_MODAL_TEXT_PATTNG =
+        'OR <a href="https://github.com/patterniha/v2rayNG" target="_blank" rel="noopener noreferrer">PattNG</a>.';
+
+      function openXrayChoiceModal(onChoice, description) {
         const modal = document.getElementById("v2rayng-choice-modal");
-        const textEl = modal?.querySelector(".modal-text");
         if (!modal) return;
-        if (textEl) {
-          textEl.innerHTML =
-            'Select the config type you want to copy for the selected ProxyIP(s) OR <a href="https://github.com/patterniha/v2rayNG" target="_blank" rel="noopener noreferrer">PattNG</a>.';
-        }
-        v2rayngChoiceHandler = (enhanced) =>
-          copySelectedProxyConfigs(
-            bulkCopyXrayBtn,
-            enhanced ? "data-xray-enhanced-link" : "data-xray-link",
-            { showPattng: enhanced },
-          );
+        const textEl = modal.querySelector(".modal-text");
+        if (textEl && description) textEl.innerHTML = description;
+        v2rayngChoiceHandler = onChoice;
         modal.style.display = "flex";
         setTimeout(() => modal.classList.add("visible"), 10);
+      }
+
+      function openProxyIpXrayChoiceModal(bulkCopyXrayBtn) {
+        openXrayChoiceModal(
+          (enhanced) =>
+            copySelectedProxyConfigs(
+              bulkCopyXrayBtn,
+              enhanced ? "data-xray-enhanced-link" : "data-xray-link",
+              { showPattng: enhanced },
+            ),
+          `Select the config type you want to copy for the selected ProxyIP(s) ${XRAY_CHOICE_MODAL_TEXT_PATTNG}`,
+        );
       }
 
       function copySelectedProxyConfigs(button, attr, opts = {}) {
@@ -2701,6 +2729,19 @@
         const url = card.getAttribute("data-url");
         if (!url) return;
         list.addEventListener("click", (e) => {
+          const xrayBtn = e.target.closest("[data-proxyip-link-normal]");
+          if (xrayBtn) {
+            openXrayChoiceModal((enhanced) => {
+              const attr = enhanced ? "data-proxyip-link-enhanced" : "data-proxyip-link-normal";
+              const link = decodeURIComponent(xrayBtn.getAttribute(attr) || "");
+              if (!link) return;
+              copyToClipboard(xrayBtn, link);
+              const lines = configCopiedToastLines(1);
+              if (enhanced) lines.push(pattngCopyToastLine(1));
+              showCopyToast(lines);
+            }, `Select the config type you want to copy for this ProxyIP ${XRAY_CHOICE_MODAL_TEXT_PATTNG}`);
+            return;
+          }
           const btn = e.target.closest("[data-proxyip-link]");
           if (!btn) return;
           const link = decodeURIComponent(btn.getAttribute("data-proxyip-link"));
@@ -3212,23 +3253,15 @@
         if (v2rayngModal && v2rayngNormalBtn && v2rayngEnhancedBtn && v2rayngImportBtn) {
           v2rayngNormalBtn.addEventListener("click", () => {
             closeV2rayngModal();
-            if (v2rayngChoiceHandler) {
-              const handler = v2rayngChoiceHandler;
-              v2rayngChoiceHandler = null;
-              handler(false);
-              return;
-            }
-            attemptV2rayNgLaunch(v2rayngImportBtn.getAttribute("data-copy-url"));
+            const handler = v2rayngChoiceHandler;
+            v2rayngChoiceHandler = null;
+            handler?.(false);
           });
           v2rayngEnhancedBtn.addEventListener("click", () => {
             closeV2rayngModal();
-            if (v2rayngChoiceHandler) {
-              const handler = v2rayngChoiceHandler;
-              v2rayngChoiceHandler = null;
-              handler(true);
-              return;
-            }
-            attemptV2rayNgLaunch(v2rayngImportBtn.getAttribute("data-copy-url-enhanced"));
+            const handler = v2rayngChoiceHandler;
+            v2rayngChoiceHandler = null;
+            handler?.(true);
           });
           v2rayngModal.addEventListener("click", (event) => {
             if (event.target === v2rayngModal) {
@@ -3365,14 +3398,13 @@
               }
               if (el.id === "v2rayng-import-btn") {
                 e.preventDefault();
-                const textEl = v2rayngModal.querySelector(".modal-text");
-                if (textEl) {
-                  textEl.innerHTML =
-                    'Select the subscription type you want to import into v2rayNG OR <a href="https://github.com/patterniha/v2rayNG" target="_blank" rel="noopener noreferrer">PattNG</a>.';
-                }
-                v2rayngChoiceHandler = null;
-                v2rayngModal.style.display = "flex";
-                setTimeout(() => v2rayngModal.classList.add("visible"), 10);
+                openXrayChoiceModal(
+                  (enhanced) =>
+                    attemptV2rayNgLaunch(
+                      v2rayngImportBtn.getAttribute(enhanced ? "data-copy-url-enhanced" : "data-copy-url"),
+                    ),
+                  `Select the subscription type you want to import into v2rayNG ${XRAY_CHOICE_MODAL_TEXT_PATTNG}`,
+                );
               }
             },
             onLongPress: () => {

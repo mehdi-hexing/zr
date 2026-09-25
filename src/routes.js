@@ -16,6 +16,8 @@ import {
   pickRandomProxyPort,
   pickRandomProxyAddress,
   getCloudflareIpPool,
+  CF_TLS_PORTS,
+  CF_NON_TLS_PORTS,
 } from "./core.js";
 import panelB64 from "./panel.b64";
 const panelBytes = Uint8Array.from(atob(panelB64), (c) => c.charCodeAt(0));
@@ -567,27 +569,38 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
   });
 
   const cfIpPool = await getCloudflareIpPool(ctx);
-  const nat64Address = pickRandomProxyAddress(hostName, cfIpPool);
-  const nat64On = buildLink({
-    core: "xray",
-    proto: "tls",
-    userID,
-    hostName,
-    address: nat64Address,
-    port: 443,
-    tag: "NAT64",
-    overrides: { nat64: true },
-  });
-  const nat64Off = buildLink({
-    core: "xray",
-    proto: "tls",
-    userID,
-    hostName,
-    address: nat64Address,
-    port: 443,
-    tag: "NAT64",
-    overrides: { nat64: false },
-  });
+  const isPagesDeployment = hostName.endsWith(".pages.dev");
+
+  function buildNat64Pair({ nat64, enhanced }) {
+    const tlsLink = buildLink({
+      core: "xray",
+      proto: "tls",
+      userID,
+      hostName,
+      address: pickRandomProxyAddress(hostName, cfIpPool),
+      port: pick(CF_TLS_PORTS),
+      tag: "NAT64",
+      enhanced,
+      overrides: { nat64 },
+    });
+    const tcpLink = buildLink({
+      core: "xray",
+      proto: isPagesDeployment ? "tls" : "tcp",
+      userID,
+      hostName,
+      address: pickRandomProxyAddress(hostName, cfIpPool),
+      port: isPagesDeployment ? pick(CF_TLS_PORTS) : pick(CF_NON_TLS_PORTS),
+      tag: "NAT64",
+      enhanced,
+      overrides: { nat64 },
+    });
+    return `${tlsLink}\n${tcpLink}`;
+  }
+
+  const nat64OnNormal = buildNat64Pair({ nat64: true, enhanced: false });
+  const nat64OnEnhanced = buildNat64Pair({ nat64: true, enhanced: true });
+  const nat64OffNormal = buildNat64Pair({ nat64: false, enhanced: false });
+  const nat64OffEnhanced = buildNat64Pair({ nat64: false, enhanced: true });
 
   const settingsUrl = buildSettingsUrl(workerName);
   const workerLabel = hostName.split(".")[0] || "INDEX";
@@ -605,8 +618,10 @@ export async function handleConfigPage(userID, hostName, proxyAddress, workerNam
   .replace(/{{CONFIG_FREEDOM}}/g, freedom)
   .replace(/{{CONFIG_PATTNG}}/g, pattng)
   .replace(/{{NAT64_DEFAULT}}/g, nat64 ? "on" : "off")
-  .replace(/{{CONFIG_NAT64_ON}}/g, nat64On)
-  .replace(/{{CONFIG_NAT64_OFF}}/g, nat64Off)
+  .replace(/{{CONFIG_NAT64_ON_NORMAL}}/g, nat64OnNormal)
+  .replace(/{{CONFIG_NAT64_ON_ENHANCED}}/g, nat64OnEnhanced)
+  .replace(/{{CONFIG_NAT64_OFF_NORMAL}}/g, nat64OffNormal)
+  .replace(/{{CONFIG_NAT64_OFF_ENHANCED}}/g, nat64OffEnhanced)
   .replace(/{{URL_PROXYIPS}}/g, subProxyIpsUrl)
   .replace(/{{URL_WORKER_SETTINGS}}/g, settingsUrl)
   .replace(/{{URL_V2RAYNG_ENHANCED}}/g, `${SENS.v2rayng()}${subXrayUrlVEnhanced}`)
