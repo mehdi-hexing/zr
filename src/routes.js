@@ -413,8 +413,10 @@ function buildProxyEntryConfigs(entry, hostName, userID, index, cfIpPool) {
   const proxyIP = `${entry.ip}:${entry.port}`;
   const isPagesDeployment = hostName.endsWith(".pages.dev");
   const xrayPort = pickRandomProxyPort(isPagesDeployment);
+  const xrayNormalPort = pickRandomProxyPort(isPagesDeployment);
   const sbPort = pickRandomProxyPort(isPagesDeployment);
   const xrayAddress = pickRandomProxyAddress(hostName, cfIpPool);
+  const xrayNormalAddress = pickRandomProxyAddress(hostName, cfIpPool);
   const sbAddress = pickRandomProxyAddress(hostName, cfIpPool);
   const xray = buildLink({
     core: "xray",
@@ -424,6 +426,17 @@ function buildProxyEntryConfigs(entry, hostName, userID, index, cfIpPool) {
     address: xrayAddress,
     port: xrayPort.port,
     enhanced: true,
+    tag,
+    overrides: { proxyIP },
+  });
+  const xrayNormal = buildLink({
+    core: "xray",
+    proto: xrayNormalPort.proto,
+    userID,
+    hostName,
+    address: xrayNormalAddress,
+    port: xrayNormalPort.port,
+    enhanced: false,
     tag,
     overrides: { proxyIP },
   });
@@ -443,6 +456,7 @@ function buildProxyEntryConfigs(entry, hostName, userID, index, cfIpPool) {
     hostType: entry.hostType,
     risk: entry.risk,
     score: entry.score,
+    xrayNormalLink: xrayNormal,
     configs: [
       { label: "Xray", link: xray },
       { label: "Singbox", link: sb },

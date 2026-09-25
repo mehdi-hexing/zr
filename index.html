@@ -2562,6 +2562,7 @@
             const selected = i === 0;
             const xrayCfg = entry.configs.find((c) => c.label === "Xray");
             const sbCfg = entry.configs.find((c) => c.label === "Singbox");
+            const xrayNormalLink = entry.xrayNormalLink ?? "";
             const configButtons = entry.configs
               .map(
                 (cfgItem) => `
@@ -2579,7 +2580,7 @@
             return `
               <div class="proxyip-ip-option${selected ? " selected" : ""}">
                 <label class="proxyip-ip-toggle">
-                  <input type="checkbox" class="proxyip-select"${selected ? " checked" : ""} data-xray-link="${encodeURIComponent(xrayCfg?.link ?? "")}" data-sb-link="${encodeURIComponent(sbCfg?.link ?? "")}" aria-label="Select ${escapeHtml(entry.ip)} - shows its config and marks it for bulk copy">
+                  <input type="checkbox" class="proxyip-select"${selected ? " checked" : ""} data-xray-link="${encodeURIComponent(xrayNormalLink)}" data-xray-enhanced-link="${encodeURIComponent(xrayCfg?.link ?? "")}" data-sb-link="${encodeURIComponent(sbCfg?.link ?? "")}" aria-label="Select ${escapeHtml(entry.ip)} - shows its config and marks it for bulk copy">
                   <span class="proxyip-index">${counter.n}</span>
                   <span class="proxyip-ip-addr">${escapeHtml(entry.ip)}</span>
                   <span class="badge ${badgeClass}">${escapeHtml(entry.score ?? "?")} - ${escapeHtml(entry.risk || "Unknown")}</span>
@@ -2626,6 +2627,26 @@
         if (countEl) countEl.textContent = `${checked} selected`;
         if (xrayBtn) xrayBtn.disabled = checked === 0;
         if (sbBtn) sbBtn.disabled = checked === 0;
+      }
+
+      let v2rayngChoiceHandler = null;
+
+      function openProxyIpXrayChoiceModal(bulkCopyXrayBtn) {
+        const modal = document.getElementById("v2rayng-choice-modal");
+        const textEl = modal?.querySelector(".modal-text");
+        if (!modal) return;
+        if (textEl) {
+          textEl.innerHTML =
+            'Select the config type you want to copy for the selected ProxyIP(s) OR <a href="https://github.com/patterniha/v2rayNG" target="_blank" rel="noopener noreferrer">PattNG</a>.';
+        }
+        v2rayngChoiceHandler = (enhanced) =>
+          copySelectedProxyConfigs(
+            bulkCopyXrayBtn,
+            enhanced ? "data-xray-enhanced-link" : "data-xray-link",
+            { showPattng: enhanced },
+          );
+        modal.style.display = "flex";
+        setTimeout(() => modal.classList.add("visible"), 10);
       }
 
       function copySelectedProxyConfigs(button, attr, opts = {}) {
@@ -2694,9 +2715,7 @@
         });
         const bulkCopyXrayBtn = document.getElementById("proxyip-bulk-copy-xray");
         const bulkCopySbBtn = document.getElementById("proxyip-bulk-copy-sb");
-        bulkCopyXrayBtn?.addEventListener("click", () =>
-          copySelectedProxyConfigs(bulkCopyXrayBtn, "data-xray-link", { showPattng: true }),
-        );
+        bulkCopyXrayBtn?.addEventListener("click", () => openProxyIpXrayChoiceModal(bulkCopyXrayBtn));
         bulkCopySbBtn?.addEventListener("click", () =>
           copySelectedProxyConfigs(bulkCopySbBtn, "data-sb-link"),
         );
@@ -3193,14 +3212,29 @@
         if (v2rayngModal && v2rayngNormalBtn && v2rayngEnhancedBtn && v2rayngImportBtn) {
           v2rayngNormalBtn.addEventListener("click", () => {
             closeV2rayngModal();
+            if (v2rayngChoiceHandler) {
+              const handler = v2rayngChoiceHandler;
+              v2rayngChoiceHandler = null;
+              handler(false);
+              return;
+            }
             attemptV2rayNgLaunch(v2rayngImportBtn.getAttribute("data-copy-url"));
           });
           v2rayngEnhancedBtn.addEventListener("click", () => {
             closeV2rayngModal();
+            if (v2rayngChoiceHandler) {
+              const handler = v2rayngChoiceHandler;
+              v2rayngChoiceHandler = null;
+              handler(true);
+              return;
+            }
             attemptV2rayNgLaunch(v2rayngImportBtn.getAttribute("data-copy-url-enhanced"));
           });
           v2rayngModal.addEventListener("click", (event) => {
-            if (event.target === v2rayngModal) closeV2rayngModal();
+            if (event.target === v2rayngModal) {
+              v2rayngChoiceHandler = null;
+              closeV2rayngModal();
+            }
           });
         }
         const pattngPre = document.getElementById("pattng-config");
@@ -3331,6 +3365,12 @@
               }
               if (el.id === "v2rayng-import-btn") {
                 e.preventDefault();
+                const textEl = v2rayngModal.querySelector(".modal-text");
+                if (textEl) {
+                  textEl.innerHTML =
+                    'Select the subscription type you want to import into v2rayNG OR <a href="https://github.com/patterniha/v2rayNG" target="_blank" rel="noopener noreferrer">PattNG</a>.';
+                }
+                v2rayngChoiceHandler = null;
                 v2rayngModal.style.display = "flex";
                 setTimeout(() => v2rayngModal.classList.add("visible"), 10);
               }
