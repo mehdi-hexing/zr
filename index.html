@@ -285,16 +285,16 @@
 
       .button.copied,
       .client-btn.copied {
-        background: var(--success-muted) !important;
-        border-color: rgba(63, 185, 80, 0.4) !important;
-        color: #7ee787 !important;
+        background: var(--bgColor-overlay);
+        border-color: var(--borderColor-default);
+        color: var(--fgColor-default);
       }
 
       .button.error,
       .client-btn.error {
-        background: var(--danger-muted) !important;
-        border-color: rgba(248, 81, 73, 0.4) !important;
-        color: #ff9b92 !important;
+        background: var(--bgColor-overlay);
+        border-color: var(--borderColor-default);
+        color: var(--fgColor-default);
       }
 
       .fragment-builder {
@@ -2341,20 +2341,15 @@
       function flashFeedback(el, success) {
         if (!el.dataset.flashing) {
           el.dataset.flashing = "1";
-          const icon = el.querySelector(".client-icon");
-          const originalIcon = icon ? icon.innerHTML : "";
-          if (icon) {
-            icon.style.color = success ? "#7ee787" : "#ff9b92";
-            icon.innerHTML = `<svg viewBox="0 0 24 24"><path d="${
-              success ? "M20 6L9 17l-5-5" : "M18 6L6 18M6 6l12 12"
-            }"></path></svg>`;
-          }
+          const originalHTML = el.innerHTML;
+          el.innerHTML = `
+      <svg class="copy-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="${success ? "M20 6L9 17l-5-5" : "M18 6L6 18M6 6l12 12"}"></path>
+      </svg>
+    `;
           el.classList.add(success ? "copied" : "error");
           setTimeout(() => {
-            if (icon) {
-              icon.innerHTML = originalIcon;
-              icon.style.color = "";
-            }
+            el.innerHTML = originalHTML;
             el.classList.remove("copied", "error");
             delete el.dataset.flashing;
           }, 1200);
