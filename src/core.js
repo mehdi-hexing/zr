@@ -51,6 +51,11 @@ export const Config = {
 };
 
 const IPV4_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
+export const API_HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+  Accept: "application/json",
+};
 
 export async function resolveIPv4ViaDoH(hostname) {
   if (IPV4_REGEX.test(hostname)) return hostname;
@@ -68,15 +73,8 @@ export async function resolveIPv4ViaDoH(hostname) {
   }
 }
 
-export async function fetchDomainIpPool(domain, timeout = 60000) {
-  try {
-    const res = await safeFetch(
-      `https://harmonica.serpents.workers.dev/api/domain/${encodeURIComponent(domain)}`,
-      {},
-      timeout,
-    );
-    if (!res.ok) return [];
-    const data = await res.json();
+export async function fetchDomainIpPool(domain, timeout = 80000) {
+  const parseResults = (data) => {
     if (!data || data.success === false || !Array.isArray(data.results)) return [];
     return data.results
       .filter((r) => r && typeof r.ip === "string" && IPV4_REGEX.test(r.ip))
@@ -87,9 +85,38 @@ export async function fetchDomainIpPool(domain, timeout = 60000) {
         country: r.details?.country || "Unknown",
         countryCode: (r.details?.country_code || "").toLowerCase(),
       }));
+  };
+
+  try {
+    const resPages = await safeFetch(
+      `https://cf-connected.pages.dev/api/domain/${encodeURIComponent(domain)}`,
+      { headers: API_HEADERS },
+      timeout,
+    );
+    if (resPages.ok) {
+      const dataPages = await resPages.json();
+      const pool = parseResults(dataPages);
+      if (pool.length > 0) return pool;
+    }
   } catch (e) {
-    return [];
+    console.error("Primary — fetchDomainIpPool failed:", e.toString());
   }
+
+  try {
+    const resHarmonica = await safeFetch(
+      `https://api-serpents.pages.dev/api/domain/${encodeURIComponent(domain)}`,
+      { headers: API_HEADERS },
+      timeout,
+    );
+    if (resHarmonica.ok) {
+      const dataHarmonica = await resHarmonica.json();
+      return parseResults(dataHarmonica);
+    }
+  } catch (e) {
+    console.error("Secondary — fetchDomainIpPool failed:", e.toString());
+  }
+
+  return [];
 }
 
 export async function safeFetch(url, options = {}, timeout = 4000) {
@@ -137,13 +164,14 @@ export const CORE_PRESETS = {
       path: () => generateRandomPath(12, "ed=2048"),
       security: "tls",
       fp: "chrome",
-      alpn: "h3,h2,http/1.1",
+      alpn: "http/1.1",
       extra: {},
     },
     tcp: {
       path: () => generateRandomPath(12, "ed=2048"),
       security: "none",
       fp: "chrome",
+      alpn: "http/1.1",
       extra: {},
     },
   },
@@ -151,12 +179,15 @@ export const CORE_PRESETS = {
     tls: {
       path: () => generateRandomPath(18),
       security: "tls",
-      alpn: "h3,h2,http/1.1",
+      fp: "chrome",
+      alpn: "http/1.1",
       extra: CONST.ED_PARAMS,
     },
     tcp: {
       path: () => generateRandomPath(18),
       security: "none",
+      fp: "chrome",
+      alpn: "http/1.1",
       extra: CONST.ED_PARAMS,
     },
   },
@@ -169,46 +200,10 @@ export function pickRandomProxyPort(isPagesDeployment) {
   const pool = isPagesDeployment
     ? CF_TLS_PORTS.map((port) => ({ port, proto: "tls" }))
     : [
-    ...CF_TLS_PORTS.map((port) => ({ port, proto: "tls" })),
-    ...CF_NON_TLS_PORTS.map((port) => ({ port, proto: "tcp" })),
-    ];
+        ...CF_TLS_PORTS.map((port) => ({ port, proto: "tls" })),
+        ...CF_NON_TLS_PORTS.map((port) => ({ port, proto: "tcp" })),
+      ];
   return pool[Math.floor(Math.random() * pool.length)];
-}
-
-export async function getCloudflareIpPool(ctx) {
-  try {
-    const cache = caches.default;
-    const cacheKey = new Request("https://cf-ip-cache.local");
-    let response = await cache.match(cacheKey);
-    if (!response) {
-      const r = await safeFetch(
-        "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/Cloudflare-IPs.json",
-        {},
-        4000,
-      );
-      if (r.ok) {
-        response = new Response(await r.text(), {
-          headers: { "Cache-Control": "public, max-age=86400" },
-        });
-        if (ctx?.waitUntil) ctx.waitUntil(cache.put(cacheKey, response.clone()));
-      }
-    }
-    if (!response) return [];
-    const json = await response.json();
-    return [...(json.ipv4 || []), ...(json.ipv6 || [])].map((x) => x.ip).filter((ip) => !isInIgnoredRange(ip));
-  } catch (e) {
-    return [];
-  }
-}
-
-export function pickRandomProxyAddress(hostName, ips = []) {
-  const domains = buildMainDomains(hostName);
-  const useIP = ips.length > 0 && Math.random() < 0.5;
-  if (useIP) {
-    const ip = pick(ips);
-    return ip.includes(":") ? `[${ip}]` : ip;
-  }
-  return pick(domains);
 }
 
 export function countryCodeToFlagEmoji(countryCode) {
@@ -267,13 +262,10 @@ export function createVlessLink({
   name,
 }) {
   const params = new URLSearchParams({ type: decodeSecure("d3M="), host, path });
-  params.set("encryption", "none");
   if (security) params.set("security", security);
-  if (security === "tls") {
-    if (sni) params.set("sni", sni);
-    if (fp) params.set("fp", fp);
-    params.set("alpn", alpn || "http/1.1");
-  }
+  if (sni) params.set("sni", sni);
+  if (fp) params.set("fp", fp);
+  if (alpn) params.set("alpn", alpn);
   if (enhanced) {
     if (security === "tls") params.set("cs", CONST.CIPHER_SUITES);
     params.set("fm", CONST.FINAL_MASK);
@@ -370,6 +362,9 @@ export function buildSubscriptionHeaders(subName) {
     "Profile-Update-Interval": "8",
     "Subscription-Userinfo": subInfo,
   };
-  if (subName) headers["Profile-Title"] = subName;
-  return headers;
-}
+  if (subName) {
+    headers["Profile-Title"] = /^[\x20-\x7e]+$/.test(subName)
+      ? subName
+      : `base64:${btoa(String.fromCharCode(...new TextEncoder().encode(subName)))}`;
+  };
+ }

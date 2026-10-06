@@ -14,7 +14,12 @@ import {
 
 let wasmReady = null;
 function ensureWasm() {
-  if (!wasmReady) wasmReady = init(wasm);
+  if (!wasmReady) {
+    wasmReady = init(wasm).catch((e) => {
+      wasmReady = null;
+      throw e;
+    });
+  }
   return wasmReady;
 }
 
@@ -26,7 +31,7 @@ function notFoundPage(hostName, workerName) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Oops, Not Found</title>
+<title>Oops. Not Found</title>
 <style>
   body {
     background: #0d1117;
@@ -102,27 +107,26 @@ export default {
         return await handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx, true, cfg, env);
       if (url.pathname.startsWith(`/xray/${cfg.userID}`))
         return await handleIpSubscription(
-        request,
-        "xray",
-        cfg.userID,
-        url.hostname,
-        ctx,
-        false,
-        cfg,
-        env,
+          request,
+          "xray",
+          cfg.userID,
+          url.hostname,
+          ctx,
+          false,
+          cfg,
+          env,
         );
       if (url.pathname.startsWith(`/sb/${cfg.userID}`))
         return await handleIpSubscription(request, "sb", cfg.userID, url.hostname, ctx, false, cfg, env);
       if (url.pathname.startsWith(`/clash/${cfg.userID}`))
-        return await handleClashConfig(request, cfg, url.hostname, ctx);
+        return await handleClashConfig(request, cfg.userID, url.hostname, ctx);
       if (url.pathname.startsWith(`/${cfg.userID}`))
         return await handleConfigPage(
-        cfg.userID,
-        url.hostname,
-        cfg.proxyAddress,
-        cfg.workerName,
-        cfg.nat64,
-        ctx,
+          cfg.userID,
+          url.hostname,
+          cfg.proxyAddress,
+          cfg.workerName,
+          cfg.nat64,
         );
 
       return new Response(notFoundPage(url.hostname, cfg.workerName), {
@@ -130,9 +134,7 @@ export default {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     } catch (err) {
-      const message = err && err.message ? err.message : String(err);
-      const stack = err && err.stack ? err.stack : "";
-      return new Response(`Worker Logic Error: ${message}\n${stack}`, {
+      return new Response(`Worker Logic Error: ${err.message}\n${err.stack}`, {
         status: 500,
         headers: { "Content-Type": "text/plain" },
       });

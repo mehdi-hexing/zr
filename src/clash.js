@@ -4,14 +4,9 @@ import {
   generateRandomPath,
   buildMainDomains,
   buildSubscriptionHeaders,
-  withConfigOverrides,
-  pickRandomProxyPort,
-  pickRandomProxyAddress,
-  getCloudflareIpPool,
   CONST,
   SENS,
 } from "./core.js";
-import { buildProxyIpPool, selectBalancedProxyEntries, proxyEntryTag } from "./routes.js";
 
 const GENERAL_TEMPLATE = `port: 7890
 socks-port: 7891
@@ -103,8 +98,8 @@ sniffer:
         - 2096
 `;
 
-function clashProxyBlock({ name, server, port, uuid, hostName, tls, overrides }) {
-  const path = withConfigOverrides(generateRandomPath(18), overrides);
+function clashProxyBlock({ name, server, port, uuid, hostName, tls }) {
+  const path = generateRandomPath(18);
   const lines = [
     `  - name: ${name}`,
     `    type: ${SENS.vless()}`,
@@ -129,8 +124,7 @@ function clashProxyBlock({ name, server, port, uuid, hostName, tls, overrides })
   return lines.join("\n");
 }
 
-export async function handleClashConfig(request, cfg, hostName, ctx) {
-  const userID = cfg.userID;
+export async function handleClashConfig(request, userID, hostName, ctx) {
   const url = new URL(request.url);
   const subName = url.searchParams.get("name");
   const httpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
@@ -197,33 +191,6 @@ export async function handleClashConfig(request, cfg, hostName, ctx) {
     }
   } catch (e) {
     console.error("Clash IP fetch failed", e);
-  }
-
-  try {
-    const pool = await buildProxyIpPool(cfg, ctx);
-    const selected = selectBalancedProxyEntries(pool);
-    const cfIpPool = await getCloudflareIpPool(ctx);
-
-    for (let i = 0; i < selected.length; i++) {
-      const entry = selected[i];
-      const tag = proxyEntryTag(entry, i);
-      const { proto, port } = pickRandomProxyPort(isPagesDeployment);
-      const server = pickRandomProxyAddress(hostName, cfIpPool);
-      proxies.push(
-        clashProxyBlock({
-          name: tag,
-          server,
-          port,
-          uuid: userID,
-          hostName,
-          tls: proto === "tls",
-          overrides: { proxyIP: `${entry.ip}:${entry.port}` },
-        }),
-      );
-      names.push(tag);
-    }
-  } catch (e) {
-    console.error("ProxyIP pool for clash failed", e);
   }
 
   const groupList = names.map((n) => `      - ${n}`).join("\n");
