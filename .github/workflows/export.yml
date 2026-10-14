@@ -1,16 +1,17 @@
-name: 📦 Build Worker Files
+name: 📦 Export Worker Files
 
 on:
   push:
     branches:
       - main
+      - master
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: export-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,40 +22,43 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
         with:
-          node-version: 22
+          tool: wasm-pack
 
-      - name: Install bundler
-        run: npm install --no-audit --no-fund
+      - name: Encode panel
+        run: base64 -w0 index.html > src/panel.b64
 
-      - name: Build worker.js and _worker.js
-        run: node scripts/bundle.mjs
+      - name: Build bundle (wrangler dry-run)
+        run: npx --yes wrangler@4 deploy --dry-run --outdir dist
+
+      - name: Collect worker.js and _worker.js
+        run: |
+          ls -la dist
+          mkdir -p out/worker out/_worker
+          cp dist/index.js out/worker/worker.js
+          cp dist/index.js out/_worker/_worker.js
+          # index.js imports the compiled .wasm by relative path -> keep it next to the js
+          cp dist/*.wasm out/worker/
+          cp dist/*.wasm out/_worker/
 
       - name: Upload worker.js
         uses: actions/upload-artifact@v4
         with:
           name: worker.js
-          path: dist/worker.js
+          path: out/worker/
           if-no-files-found: error
 
       - name: Upload _worker.js
         uses: actions/upload-artifact@v4
         with:
           name: _worker.js
-          path: dist/_worker.js
+          path: out/_worker/
           if-no-files-found: error
-
-      - name: Summary
-        run: |
-          {
-            echo "## 📦 Build finished"
-            echo ""
-            echo "| **File** | **Size** |"
-            echo "|:---------|:---------|"
-            echo "| \`worker.js\` | $(du -h dist/worker.js | cut -f1) |"
-            echo "| \`_worker.js\` | $(du -h dist/_worker.js | cut -f1) |"
-            echo ""
-            echo "Download both files from the **Artifacts** section at the bottom of this run page."
-          } >> "$GITHUB_STEP_SUMMARY"
