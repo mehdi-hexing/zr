@@ -45,9 +45,16 @@ jobs:
           mkdir -p out/worker out/_worker
           cp dist/index.js out/worker/worker.js
           cp dist/index.js out/_worker/_worker.js
-          # index.js imports the compiled .wasm by relative path -> keep it next to the js
-          cp dist/*.wasm out/worker/
-          cp dist/*.wasm out/_worker/
+          # index.js imports the compiled .wasm and the panel .b64 by relative path,
+          # so every extra module Wrangler emitted must stay next to the js
+          for f in dist/*; do
+            case "$(basename "$f")" in
+              index.js|README.md|*.map) ;;
+              *) cp "$f" out/worker/; cp "$f" out/_worker/ ;;
+            esac
+          done
+          echo "--- worker.js bundle:"; ls -la out/worker
+          echo "--- _worker.js bundle:"; ls -la out/_worker
 
       - name: Upload worker.js
         uses: actions/upload-artifact@v4
