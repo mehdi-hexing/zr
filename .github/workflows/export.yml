@@ -1,0 +1,60 @@
+name: 📦 Build Worker Files
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install bundler
+        run: npm install --no-audit --no-fund
+
+      - name: Build worker.js and _worker.js
+        run: node scripts/bundle.mjs
+
+      - name: Upload worker.js
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker.js
+          path: dist/worker.js
+          if-no-files-found: error
+
+      - name: Upload _worker.js
+        uses: actions/upload-artifact@v4
+        with:
+          name: _worker.js
+          path: dist/_worker.js
+          if-no-files-found: error
+
+      - name: Summary
+        run: |
+          {
+            echo "## 📦 Build finished"
+            echo ""
+            echo "| **File** | **Size** |"
+            echo "|:---------|:---------|"
+            echo "| \`worker.js\` | $(du -h dist/worker.js | cut -f1) |"
+            echo "| \`_worker.js\` | $(du -h dist/_worker.js | cut -f1) |"
+            echo ""
+            echo "Download both files from the **Artifacts** section at the bottom of this run page."
+          } >> "$GITHUB_STEP_SUMMARY"
