@@ -39,19 +39,41 @@ jobs:
       - name: Build bundle (wrangler dry-run)
         run: npx --yes wrangler@4 deploy --dry-run --outdir dist
 
-      - name: Collect worker.js and _worker.js
+      - name: Normalise module names
         run: |
           ls -la dist
+          python3 - <<'PY'
+          import glob, os, re, shutil, sys
+
+          js = open("dist/index.js", encoding="utf-8").read()
+
+          def stable(ext, name):
+              target = os.path.join("dist", name)
+              files = [f for f in glob.glob(f"dist/*{ext}") if f != target]
+              if len(files) == 1:
+                  shutil.copy(files[0], target)
+              elif not (len(files) == 0 and os.path.exists(target)):
+                  sys.exit(f"expected exactly 1 {ext} in dist, found {len(files)}")
+
+          stable(".b64", "panel.b64")
+          stable(".wasm", "zr-bg.wasm")
+
+          js, n_b64 = re.subn(r'from\s+"\./[^"]+\.b64"', 'from "./panel.b64"', js)
+          js, n_wasm = re.subn(r'from\s+"\./[^"]+\.wasm"', 'from "./zr-bg.wasm"', js)
+          if n_b64 < 1 or n_wasm < 1:
+              sys.exit(f"import rewrite failed (b64: {n_b64}, wasm: {n_wasm})")
+
+          open("dist/index.final.js", "w", encoding="utf-8").write(js)
+          print(f"rewrote {n_b64} .b64 import(s) and {n_wasm} .wasm import(s)")
+          PY
+
+      - name: Collect worker.js and _worker.js
+        run: |
           mkdir -p out/worker out/_worker
-          cp dist/index.js out/worker/worker.js
-          cp dist/index.js out/_worker/_worker.js
-          # index.js imports the compiled .wasm and the panel .b64 by relative path,
-          # so every extra module Wrangler emitted must stay next to the js
-          for f in dist/*; do
-            case "$(basename "$f")" in
-              index.js|README.md|*.map) ;;
-              *) cp "$f" out/worker/; cp "$f" out/_worker/ ;;
-            esac
+          cp dist/index.final.js out/worker/worker.js
+          cp dist/index.final.js out/_worker/_worker.js
+          for d in out/worker out/_worker; do
+            cp dist/panel.b64 dist/zr-bg.wasm "$d"/
           done
           echo "--- worker.js bundle:"; ls -la out/worker
           echo "--- _worker.js bundle:"; ls -la out/_worker
