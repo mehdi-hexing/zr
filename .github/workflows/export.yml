@@ -39,7 +39,7 @@ jobs:
       - name: Build bundle (wrangler dry-run)
         run: npx --yes wrangler@4 deploy --dry-run --outdir dist
 
-      - name: Normalise module names
+      - name: Normalise modules
         run: |
           ls -la dist
           python3 - <<'PY'
@@ -47,24 +47,28 @@ jobs:
 
           js = open("dist/index.js", encoding="utf-8").read()
 
-          def stable(ext, name):
-              target = os.path.join("dist", name)
-              files = [f for f in glob.glob(f"dist/*{ext}") if f != target]
-              if len(files) == 1:
-                  shutil.copy(files[0], target)
-              elif not (len(files) == 0 and os.path.exists(target)):
-                  sys.exit(f"expected exactly 1 {ext} in dist, found {len(files)}")
+          def inline_b64(m):
+              path = os.path.join("dist", m.group(2)[2:])
+              data = "".join(open(path, encoding="utf-8").read().split())
+              return f'const {m.group(1)} = "{data}";'
 
-          stable(".b64", "panel.b64")
-          stable(".wasm", "zr-bg.wasm")
+          js, n_b64 = re.subn(r'import\s+(\w+)\s+from\s+"(\./[^"]+\.b64)";', inline_b64, js)
 
-          js, n_b64 = re.subn(r'from\s+"\./[^"]+\.b64"', 'from "./panel.b64"', js)
+          target = os.path.join("dist", "zr-bg.wasm")
+          files = [f for f in glob.glob("dist/*.wasm") if f != target]
+          if len(files) == 1:
+              shutil.copy(files[0], target)
+          elif not (len(files) == 0 and os.path.exists(target)):
+              sys.exit(f"expected exactly 1 .wasm in dist, found {len(files)}")
           js, n_wasm = re.subn(r'from\s+"\./[^"]+\.wasm"', 'from "./zr-bg.wasm"', js)
+
           if n_b64 < 1 or n_wasm < 1:
-              sys.exit(f"import rewrite failed (b64: {n_b64}, wasm: {n_wasm})")
+              sys.exit(f"rewrite failed (b64: {n_b64}, wasm: {n_wasm})")
+          if re.search(r'from\s+"\./[^"]*\.b64"', js):
+              sys.exit("a .b64 import is still left in the bundle")
 
           open("dist/index.final.js", "w", encoding="utf-8").write(js)
-          print(f"rewrote {n_b64} .b64 import(s) and {n_wasm} .wasm import(s)")
+          print(f"inlined {n_b64} b64 module(s), normalised {n_wasm} wasm import(s)")
           PY
 
       - name: Collect worker.js and _worker.js
@@ -72,9 +76,8 @@ jobs:
           mkdir -p out/worker out/_worker
           cp dist/index.final.js out/worker/worker.js
           cp dist/index.final.js out/_worker/_worker.js
-          for d in out/worker out/_worker; do
-            cp dist/panel.b64 dist/zr-bg.wasm "$d"/
-          done
+          cp dist/zr-bg.wasm out/worker/
+          cp dist/zr-bg.wasm out/_worker/
           echo "--- worker.js bundle:"; ls -la out/worker
           echo "--- _worker.js bundle:"; ls -la out/_worker
 
@@ -91,4 +94,3 @@ jobs:
           name: _worker.js
           path: out/_worker/
           if-no-files-found: error
-
